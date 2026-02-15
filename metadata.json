@@ -1,0 +1,5 @@
+{
+  "name": "EXR Lab v0.0.5",
+  "description": "A web-based OpenEXR reader and previewer with a visual decoding pipeline log.",
+  "requestFramePermissions": []
+}
