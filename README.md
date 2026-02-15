@@ -2,6 +2,10 @@
 
 A browser-based OpenEXR reader and previewer with a visual decoding pipeline log.
 
+## Live Demo
+
+https://promto-c.github.io/exr-lab/
+
 ## Run Locally
 
 Prerequisites: Node.js 20+
