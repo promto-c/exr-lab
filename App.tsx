@@ -755,6 +755,12 @@ export default function App() {
   };
 
   const inspectData = getInspectData();
+  const getSliderProgressStyle = (value: number, min: number, max: number): React.CSSProperties => {
+    const clamped = Math.max(min, Math.min(max, value));
+    const pct = ((clamped - min) / (max - min)) * 100;
+    return { ['--value-pct' as '--value-pct']: `${pct}%` };
+  };
+
   const toneControls = (
     <div className="flex items-center space-x-2 md:space-x-4 bg-neutral-800/50 rounded-lg px-2 py-1 border border-neutral-700 overflow-x-auto no-scrollbar max-w-full">
       <div className="flex items-center space-x-2 shrink-0">
@@ -772,7 +778,9 @@ export default function App() {
           type="range" min="-10" max="10" step="0.01"
           value={exposure}
           onChange={(e) => setExposure(parseFloat(e.target.value))}
-          className="w-16 md:w-24 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"
+          className="tone-slider w-16 md:w-24"
+          style={getSliderProgressStyle(exposure, -10, 10)}
+          aria-label="Exposure"
         />
         {!isMobile && (
           <span className="text-xs font-mono w-8 text-right">{exposure.toFixed(2)}</span>
@@ -794,7 +802,9 @@ export default function App() {
           type="range" min="0.1" max="4.0" step="0.01"
           value={gamma}
           onChange={(e) => setGamma(parseFloat(e.target.value))}
-          className="w-16 md:w-24 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"
+          className="tone-slider w-16 md:w-24"
+          style={getSliderProgressStyle(gamma, 0.1, 4.0)}
+          aria-label="Gamma"
         />
         {!isMobile && (
           <span className="text-xs font-mono w-8 text-right">{gamma.toFixed(2)}</span>
@@ -824,50 +834,53 @@ export default function App() {
       )}
 
       {/* Left Panel: Sidebar + Logs */}
-      <div 
-        className={`flex flex-col bg-neutral-900 z-40 h-full transition-transform duration-300 ease-in-out border-r border-neutral-800 shadow-2xl ${
+      {(isMobile || isSidebarOpen) && (
+        <div
+          className={`flex flex-col bg-neutral-900 z-40 h-full transition-transform duration-300 ease-in-out border-r border-neutral-800 shadow-2xl ${
             isMobile ? 'absolute top-0 left-0' : 'relative shrink-0'
-        }`}
-        style={{ 
+          }`}
+          style={{
             width: isMobile ? '85vw' : sidebarWidth,
             transform: isMobile && !isSidebarOpen ? 'translateX(-100%)' : 'none',
-        }}
-      >
-        
-        {/* Top: Structure */}
-        <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
-            <Sidebar 
-                structure={structure} 
-                onSelectPart={handleSelectPart}
-                onSelectLayer={handleSelectLayer}
-                onSelectChannel={handleSelectChannel}
-                selectedPartId={selectedPartId}
-                onOpenFile={() => fileInputRef.current?.click()}
+          }}
+        >
+          {/* Top: Structure */}
+          <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
+            <Sidebar
+              structure={structure}
+              onSelectPart={handleSelectPart}
+              onSelectLayer={handleSelectLayer}
+              onSelectChannel={handleSelectChannel}
+              selectedPartId={selectedPartId}
+              onOpenFile={() => fileInputRef.current?.click()}
             />
-        </div>
+          </div>
 
-        {/* Horizontal Splitter (Sidebar vs Logs) - Only on Desktop */}
-        {!isMobile && (
-            <div 
-            className="h-1 bg-neutral-950 border-y border-neutral-800/50 hover:bg-teal-500 cursor-row-resize flex items-center justify-center transition-colors shrink-0 z-20"
-            onMouseDown={(e) => { e.preventDefault(); setIsResizingLogs(true); }}
+          {/* Horizontal Splitter (Sidebar vs Logs) - Only on Desktop */}
+          {!isMobile && (
+            <div
+              className="h-1 bg-neutral-950 border-y border-neutral-800/50 hover:bg-teal-500 cursor-row-resize flex items-center justify-center transition-colors shrink-0 z-20"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setIsResizingLogs(true);
+              }}
             >
-                <div className="w-12 h-0.5 bg-neutral-700/50 rounded-full pointer-events-none" />
+              <div className="w-12 h-0.5 bg-neutral-700/50 rounded-full pointer-events-none" />
             </div>
-        )}
+          )}
 
-        {/* Bottom: Logs - Fixed height on Mobile or Resizable on Desktop */}
-        <div 
+          {/* Bottom: Logs - Fixed height on Mobile or Resizable on Desktop */}
+          <div
             className="shrink-0 overflow-hidden flex flex-col border-t border-neutral-800"
             style={{ height: isMobile ? '40%' : logHeight }}
-        >
+          >
             <LogPanel logs={logs} />
+          </div>
         </div>
-
-      </div>
+      )}
 
       {/* Vertical Splitter (Sidebar vs Main) - Desktop Only */}
-      {!isMobile && (
+      {!isMobile && isSidebarOpen && (
           <div
               className="w-1 bg-neutral-950 border-l border-r border-neutral-800/50 hover:bg-teal-500 cursor-col-resize z-40 transition-colors shrink-0"
               onMouseDown={(e) => { e.preventDefault(); setIsResizingSidebar(true); }}
@@ -897,20 +910,6 @@ export default function App() {
                   )}
                 </div>
 
-                {!isMobile && (
-                    <div
-                    className={`hidden md:flex px-2 py-1 rounded text-[10px] font-mono border ${
-                        rendererBackend === 'webgl2'
-                        ? 'bg-teal-900/20 border-teal-700/50 text-teal-300'
-                        : 'bg-amber-900/20 border-amber-700/50 text-amber-300'
-                    }`}
-                    title={rendererFallbackReason || undefined}
-                    >
-                    <span className="opacity-60 mr-1">Ren:</span>
-                    {rendererBackend === 'webgl2' ? 'GL2' : 'CPU'}
-                    </div>
-                )}
-                
                 {structure && !isMobile && (
                   <div className="hidden lg:flex items-center space-x-1">
                      <div className="px-1.5 py-0.5 bg-black/40 border border-red-900/50 rounded text-[10px] text-red-400 font-mono">
