@@ -1,6 +1,75 @@
 :root {
   --theme-accent: #14b8a6;
+  --theme-accent-rgb: 20 184 166;
   --tone-slider-track: #4b5563;
+}
+
+.toolbar-toggle-button {
+  border: 1px solid transparent;
+  background: #262626;
+  color: #a3a3a3;
+}
+
+.toolbar-toggle-button:hover {
+  background: #404040;
+  border-color: #525252;
+  color: #ffffff;
+}
+
+.toolbar-toggle-button--active {
+  color: rgb(var(--theme-accent-rgb) / 0.95);
+  background: rgb(var(--theme-accent-rgb) / 0.2);
+  border-color: rgb(var(--theme-accent-rgb) / 0.55);
+}
+
+.toolbar-toggle-button--active:hover {
+  background: rgb(var(--theme-accent-rgb) / 0.26);
+  border-color: rgb(var(--theme-accent-rgb) / 0.7);
+  color: #ffffff;
+}
+
+.toolbar-action-item {
+  border: 1px solid transparent;
+  color: #e5e5e5;
+}
+
+.toolbar-action-item:hover {
+  background: #262626;
+}
+
+.toolbar-action-item--active {
+  color: rgb(var(--theme-accent-rgb) / 0.95);
+  background: rgb(var(--theme-accent-rgb) / 0.16);
+  border-color: rgb(var(--theme-accent-rgb) / 0.4);
+}
+
+.toolbar-action-item--active:hover {
+  background: rgb(var(--theme-accent-rgb) / 0.22);
+  border-color: rgb(var(--theme-accent-rgb) / 0.55);
+}
+
+@supports (background: color-mix(in srgb, white 50%, transparent)) {
+  .toolbar-toggle-button--active {
+    color: color-mix(in srgb, var(--theme-accent) 70%, white);
+    background: color-mix(in srgb, var(--theme-accent) 20%, transparent);
+    border-color: color-mix(in srgb, var(--theme-accent) 55%, #111827 45%);
+  }
+
+  .toolbar-toggle-button--active:hover {
+    background: color-mix(in srgb, var(--theme-accent) 26%, transparent);
+    border-color: color-mix(in srgb, var(--theme-accent) 70%, #111827 30%);
+  }
+
+  .toolbar-action-item--active {
+    color: color-mix(in srgb, var(--theme-accent) 68%, white);
+    background: color-mix(in srgb, var(--theme-accent) 16%, transparent);
+    border-color: color-mix(in srgb, var(--theme-accent) 45%, #111827 55%);
+  }
+
+  .toolbar-action-item--active:hover {
+    background: color-mix(in srgb, var(--theme-accent) 22%, transparent);
+    border-color: color-mix(in srgb, var(--theme-accent) 60%, #111827 40%);
+  }
 }
 
 .tone-slider {

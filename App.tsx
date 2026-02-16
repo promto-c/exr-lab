@@ -954,6 +954,12 @@ export default function App() {
 
   const inspectData = getInspectData();
 
+  const toolbarToggleButtonClass = (isActive: boolean): string =>
+    `toolbar-toggle-button p-1.5 rounded transition-colors ${isActive ? 'toolbar-toggle-button--active' : ''}`;
+
+  const toolbarActionItemClass = (isActive: boolean): string =>
+    `toolbar-action-item w-full flex items-center gap-2 px-2 py-2 rounded text-xs ${isActive ? 'toolbar-action-item--active' : ''}`;
+
   const toneControls = (
     <div className="flex items-center space-x-2 md:space-x-4 bg-neutral-800/50 rounded-lg px-2 py-1 border border-neutral-700 overflow-x-auto no-scrollbar max-w-full">
       <div className="flex items-center space-x-2 shrink-0">
@@ -1144,7 +1150,7 @@ export default function App() {
 
                   <button 
                       onClick={() => setShowHistogram(!showHistogram)}
-                      className={`p-1.5 rounded transition-colors ${showHistogram ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'}`}
+                      className={toolbarToggleButtonClass(showHistogram)}
                       title="Toggle Histogram"
                   >
                       <BarChart3 className="w-4 h-4" />
@@ -1152,7 +1158,7 @@ export default function App() {
 
                   <button 
                       onClick={() => setIsInspectMode(!isInspectMode)}
-                      className={`p-1.5 rounded transition-colors ${isInspectMode ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'}`}
+                      className={toolbarToggleButtonClass(isInspectMode)}
                       title="Pixel Inspector Tool"
                   >
                       <Crosshair className="w-4 h-4" />
@@ -1160,7 +1166,7 @@ export default function App() {
 
                   <button 
                       onClick={() => setShowHelp(!showHelp)}
-                      className={`p-1.5 rounded transition-colors ${showHelp ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'}`}
+                      className={toolbarToggleButtonClass(showHelp)}
                       title="Help & Shortcuts"
                   >
                       <HelpCircle className="w-4 h-4" />
@@ -1179,7 +1185,7 @@ export default function App() {
                   )}
                   <button
                     onClick={() => setIsMobileActionsOpen(prev => !prev)}
-                    className={`p-1.5 rounded transition-colors ${isMobileActionsOpen ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-300 hover:text-white hover:bg-neutral-700'}`}
+                    className={toolbarToggleButtonClass(isMobileActionsOpen)}
                     title="View Settings"
                   >
                     <SlidersHorizontal className="w-4 h-4" />
@@ -1189,28 +1195,28 @@ export default function App() {
                     <div className="absolute right-0 top-full mt-2 z-40 w-44 rounded-lg border border-neutral-700 bg-neutral-900/95 backdrop-blur shadow-2xl p-1">
                       <button
                         onClick={() => { fitView(); setIsMobileActionsOpen(false); }}
-                        className="w-full flex items-center gap-2 px-2 py-2 rounded text-xs text-neutral-200 hover:bg-neutral-800"
+                        className={toolbarActionItemClass(false)}
                       >
                         <Maximize className="w-3.5 h-3.5" />
                         Fit View
                       </button>
                       <button
                         onClick={() => { setShowHistogram(prev => !prev); setIsMobileActionsOpen(false); }}
-                        className={`w-full flex items-center gap-2 px-2 py-2 rounded text-xs hover:bg-neutral-800 ${showHistogram ? 'text-teal-300' : 'text-neutral-200'}`}
+                        className={toolbarActionItemClass(showHistogram)}
                       >
                         <BarChart3 className="w-3.5 h-3.5" />
                         Histogram
                       </button>
                       <button
                         onClick={() => { setIsInspectMode(prev => !prev); setIsMobileActionsOpen(false); }}
-                        className={`w-full flex items-center gap-2 px-2 py-2 rounded text-xs hover:bg-neutral-800 ${isInspectMode ? 'text-teal-300' : 'text-neutral-200'}`}
+                        className={toolbarActionItemClass(isInspectMode)}
                       >
                         <Crosshair className="w-3.5 h-3.5" />
                         Inspector
                       </button>
                       <button
                         onClick={() => { setShowHelp(prev => !prev); setIsMobileActionsOpen(false); }}
-                        className={`w-full flex items-center gap-2 px-2 py-2 rounded text-xs hover:bg-neutral-800 ${showHelp ? 'text-teal-300' : 'text-neutral-200'}`}
+                        className={toolbarActionItemClass(showHelp)}
                       >
                         <HelpCircle className="w-3.5 h-3.5" />
                         Help
