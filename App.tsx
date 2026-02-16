@@ -9,7 +9,7 @@ import { ExrDecoder } from './services/exr/decoder';
 import { createRenderer, getRendererPreferenceFromQuery } from './services/render/createRenderer';
 import { RenderBackend, Renderer, RendererPreference, RawDecodeResult, ChannelMapping } from './services/render/types';
 import { LogEntry, ExrStructure, LogStatus, ExrChannel } from './types';
-import { Sun, Monitor, BarChart3, Maximize, Crosshair, HelpCircle, X } from 'lucide-react';
+import { Sun, Monitor, BarChart3, Maximize, Crosshair, HelpCircle, X, Menu, SlidersHorizontal } from 'lucide-react';
 
 // Helper to guess RGB channels from a list
 const guessChannels = (channels: ExrChannel[]): ChannelMapping => {
@@ -112,6 +112,11 @@ export default function App() {
   const [isDragging, setIsDragging] = React.useState(false);
   const [dragStart, setDragStart] = React.useState({ x: 0, y: 0 });
 
+  // Touch State
+  const lastTouchRef = React.useRef<{x: number, y: number}[] | null>(null);
+  const initialPinchDistanceRef = React.useRef<number | null>(null);
+  const initialScaleRef = React.useRef<number>(1);
+
   // Help State
   const [showHelp, setShowHelp] = React.useState(false);
 
@@ -121,6 +126,11 @@ export default function App() {
   const [isResizingSidebar, setIsResizingSidebar] = React.useState(false);
   const [isResizingLogs, setIsResizingLogs] = React.useState(false);
 
+  // Mobile/Responsive State
+  const [isMobile, setIsMobile] = React.useState(window.innerWidth <= 768);
+  const [isSidebarOpen, setIsSidebarOpen] = React.useState(window.innerWidth > 768);
+  const [isMobileActionsOpen, setIsMobileActionsOpen] = React.useState(false);
+
   // Refs
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -128,7 +138,36 @@ export default function App() {
   const rendererRef = React.useRef<Renderer | null>(null);
   const decodeEpochRef = React.useRef(0);
 
-  // Resize Handlers
+  // Resize Listener
+  React.useEffect(() => {
+      const handleResize = () => {
+          const mobile = window.innerWidth <= 768;
+          setIsMobile(mobile);
+          if (!mobile) setIsMobileActionsOpen(false);
+          // Auto-close on switch to mobile, auto-open on switch to desktop
+          if (!mobile && !isSidebarOpen) setIsSidebarOpen(true);
+          if (mobile && isSidebarOpen) setIsSidebarOpen(false);
+      };
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Prevent default touch actions on canvas container
+  React.useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    
+    const preventDefault = (e: TouchEvent) => e.preventDefault();
+    el.addEventListener('touchstart', preventDefault, { passive: false });
+    el.addEventListener('touchmove', preventDefault, { passive: false });
+    
+    return () => {
+        el.removeEventListener('touchstart', preventDefault);
+        el.removeEventListener('touchmove', preventDefault);
+    };
+  }, []);
+
+  // Resize Handlers (Desktop)
   React.useEffect(() => {
     const handleGlobalMouseMove = (e: MouseEvent) => {
       if (isResizingSidebar) {
@@ -250,7 +289,7 @@ export default function App() {
     const { width, height } = rawPixelData;
     const { clientWidth, clientHeight } = containerRef.current;
     
-    const padding = 60;
+    const padding = isMobile ? 20 : 60;
     const availW = clientWidth - padding;
     const availH = clientHeight - padding;
     
@@ -261,7 +300,7 @@ export default function App() {
     const y = (clientHeight - height * finalScale) / 2;
 
     setViewTransform({ x, y, scale: finalScale });
-  }, [rawPixelData]);
+  }, [rawPixelData, isMobile]);
 
   const toggleExposure = () => {
     const isDefault = Math.abs(exposure) < 0.01;
@@ -298,6 +337,9 @@ export default function App() {
     setRawPixelData(null);
     setInspectCursor(null);
     setIsProcessing(true);
+    
+    // Close sidebar on mobile when file loaded
+    if (isMobile) setIsSidebarOpen(false);
     
     // Clear the part cache when loading a new file
     partCacheRef.current.clear();
@@ -380,6 +422,7 @@ export default function App() {
             setChannelMapping(guessChannels(part.channels));
         }
     }
+    if (isMobile) setIsSidebarOpen(false);
   };
 
   // 1. Heavy Lifting: Decode binary when part changes
@@ -473,6 +516,7 @@ export default function App() {
           const newMapping = getLayerMapping(part.channels, layerPrefix);
           setChannelMapping(newMapping);
       }
+      if (isMobile) setIsSidebarOpen(false);
   };
 
   const handleSelectChannel = (partId: number, channelName: string) => {
@@ -484,6 +528,7 @@ export default function App() {
           b: channelName,
           a: ''
       });
+      if (isMobile) setIsSidebarOpen(false);
   };
 
 
@@ -504,11 +549,6 @@ export default function App() {
       const newX = mx - imageX * newScale;
       const newY = my - imageY * newScale;
       setViewTransform({ x: newX, y: newY, scale: newScale });
-      
-      // Update inspector if active
-      if (isInspectMode && inspectCursor) {
-          // Re-verify under cursor? For now just let mouse move handle it
-      }
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -561,6 +601,78 @@ export default function App() {
       setInspectCursor(null);
   };
 
+  // --- Touch Handlers (Zoom/Pan) ---
+  const handleTouchStart = (e: React.TouchEvent) => {
+      if (e.touches.length === 1) {
+          lastTouchRef.current = [{x: e.touches[0].clientX, y: e.touches[0].clientY}];
+          setIsDragging(true);
+      } else if (e.touches.length === 2) {
+          const t1 = e.touches[0];
+          const t2 = e.touches[1];
+          const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+          initialPinchDistanceRef.current = dist;
+          initialScaleRef.current = viewTransform.scale;
+          lastTouchRef.current = [
+              {x: t1.clientX, y: t1.clientY},
+              {x: t2.clientX, y: t2.clientY}
+          ];
+      }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+      // Native scroll prevention is handled by non-passive listener in useEffect
+
+      // Pan (1 finger)
+      if (e.touches.length === 1 && isDragging && lastTouchRef.current && lastTouchRef.current.length === 1) {
+          const dx = e.touches[0].clientX - lastTouchRef.current[0].x;
+          const dy = e.touches[0].clientY - lastTouchRef.current[0].y;
+          
+          setViewTransform(prev => ({
+              ...prev,
+              x: prev.x + dx,
+              y: prev.y + dy
+          }));
+          
+          lastTouchRef.current = [{x: e.touches[0].clientX, y: e.touches[0].clientY}];
+      } 
+      // Zoom (2 fingers)
+      else if (e.touches.length === 2 && initialPinchDistanceRef.current && lastTouchRef.current && lastTouchRef.current.length === 2) {
+          const t1 = e.touches[0];
+          const t2 = e.touches[1];
+          const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+          
+          if (initialPinchDistanceRef.current > 0) {
+              const scaleFactor = currentDist / initialPinchDistanceRef.current;
+              let newScale = initialScaleRef.current * scaleFactor;
+              
+              if (newScale < 0.005) newScale = 0.005;
+              if (newScale > 50) newScale = 50;
+              
+              const cx = (t1.clientX + t2.clientX) / 2;
+              const cy = (t1.clientY + t2.clientY) / 2;
+              
+              const rect = containerRef.current!.getBoundingClientRect();
+              const mx = cx - rect.left;
+              const my = cy - rect.top;
+              
+              // Zoom toward center of pinch
+              const imageX = (mx - viewTransform.x) / viewTransform.scale;
+              const imageY = (my - viewTransform.y) / viewTransform.scale;
+              
+              const newX = mx - imageX * newScale;
+              const newY = my - imageY * newScale;
+
+              setViewTransform({ x: newX, y: newY, scale: newScale });
+          }
+      }
+  };
+
+  const handleTouchEnd = () => {
+      setIsDragging(false);
+      lastTouchRef.current = null;
+      initialPinchDistanceRef.current = null;
+  };
+
   // Compute inspector values for rendering
   const getInspectData = () => {
       if (!inspectCursor || !rawPixelData) return null;
@@ -582,14 +694,74 @@ export default function App() {
   };
 
   const inspectData = getInspectData();
+  const toneControls = (
+    <div className="flex items-center space-x-2 md:space-x-4 bg-neutral-800/50 rounded-lg px-2 py-1 border border-neutral-700 overflow-x-auto no-scrollbar max-w-full">
+      <div className="flex items-center space-x-2 shrink-0">
+        <button
+          onClick={toggleExposure}
+          className={`flex items-center justify-center p-1 rounded hover:bg-neutral-700 transition-colors ${exposure !== 0 ? 'text-teal-400' : 'text-neutral-400'}`}
+          title="Toggle Exposure"
+        >
+          <Sun className="w-3.5 h-3.5" />
+        </button>
+        {!isMobile && (
+          <span className="text-xs text-neutral-400">Exp:</span>
+        )}
+        <input
+          type="range" min="-10" max="10" step="0.01"
+          value={exposure}
+          onChange={(e) => setExposure(parseFloat(e.target.value))}
+          className="w-16 md:w-24 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"
+        />
+        {!isMobile && (
+          <span className="text-xs font-mono w-8 text-right">{exposure.toFixed(2)}</span>
+        )}
+      </div>
+      <div className="w-px h-4 bg-neutral-700 shrink-0"></div>
+      <div className="flex items-center space-x-2 shrink-0">
+        <button
+          onClick={toggleGamma}
+          className={`flex items-center justify-center p-1 rounded hover:bg-neutral-700 transition-colors ${Math.abs(gamma - 2.2) > 0.01 ? 'text-teal-400' : 'text-neutral-400'}`}
+          title="Toggle Gamma"
+        >
+          <Monitor className="w-3.5 h-3.5" />
+        </button>
+        {!isMobile && (
+          <span className="text-xs text-neutral-400">Gamma:</span>
+        )}
+        <input
+          type="range" min="0.1" max="4.0" step="0.01"
+          value={gamma}
+          onChange={(e) => setGamma(parseFloat(e.target.value))}
+          className="w-16 md:w-24 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"
+        />
+        {!isMobile && (
+          <span className="text-xs font-mono w-8 text-right">{gamma.toFixed(2)}</span>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex h-screen w-screen bg-neutral-950 text-neutral-200 font-sans overflow-hidden">
       
+      {/* Sidebar Backdrop (Mobile Only) */}
+      {isMobile && isSidebarOpen && (
+          <div 
+            className="absolute inset-0 bg-black/60 z-30 backdrop-blur-sm animate-in fade-in"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+      )}
+
       {/* Left Panel: Sidebar + Logs */}
       <div 
-        className="flex flex-col shrink-0 bg-neutral-900 z-30 h-full"
-        style={{ width: sidebarWidth }}
+        className={`flex flex-col bg-neutral-900 z-40 h-full transition-transform duration-300 ease-in-out border-r border-neutral-800 shadow-2xl ${
+            isMobile ? 'absolute top-0 left-0' : 'relative shrink-0'
+        }`}
+        style={{ 
+            width: isMobile ? '85vw' : sidebarWidth,
+            transform: isMobile && !isSidebarOpen ? 'translateX(-100%)' : 'none',
+        }}
       >
         
         {/* Top: Structure */}
@@ -604,160 +776,204 @@ export default function App() {
             />
         </div>
 
-        {/* Horizontal Splitter (Sidebar vs Logs) */}
-        <div 
-           className="h-1 bg-neutral-950 border-y border-neutral-800/50 hover:bg-teal-500 cursor-row-resize flex items-center justify-center transition-colors shrink-0 z-20"
-           onMouseDown={(e) => { e.preventDefault(); setIsResizingLogs(true); }}
-        >
-             {/* Handle Graphic */}
-             <div className="w-12 h-0.5 bg-neutral-700/50 rounded-full pointer-events-none" />
-        </div>
+        {/* Horizontal Splitter (Sidebar vs Logs) - Only on Desktop */}
+        {!isMobile && (
+            <div 
+            className="h-1 bg-neutral-950 border-y border-neutral-800/50 hover:bg-teal-500 cursor-row-resize flex items-center justify-center transition-colors shrink-0 z-20"
+            onMouseDown={(e) => { e.preventDefault(); setIsResizingLogs(true); }}
+            >
+                <div className="w-12 h-0.5 bg-neutral-700/50 rounded-full pointer-events-none" />
+            </div>
+        )}
 
-        {/* Bottom: Logs */}
+        {/* Bottom: Logs - Fixed height on Mobile or Resizable on Desktop */}
         <div 
-            className="shrink-0 overflow-hidden flex flex-col"
-            style={{ height: logHeight }}
+            className="shrink-0 overflow-hidden flex flex-col border-t border-neutral-800"
+            style={{ height: isMobile ? '40%' : logHeight }}
         >
             <LogPanel logs={logs} />
         </div>
 
       </div>
 
-      {/* Vertical Splitter (Sidebar vs Main) */}
-      <div
-          className="w-1 bg-neutral-950 border-l border-r border-neutral-800/50 hover:bg-teal-500 cursor-col-resize z-40 transition-colors shrink-0"
-          onMouseDown={(e) => { e.preventDefault(); setIsResizingSidebar(true); }}
-      ></div>
+      {/* Vertical Splitter (Sidebar vs Main) - Desktop Only */}
+      {!isMobile && (
+          <div
+              className="w-1 bg-neutral-950 border-l border-r border-neutral-800/50 hover:bg-teal-500 cursor-col-resize z-40 transition-colors shrink-0"
+              onMouseDown={(e) => { e.preventDefault(); setIsResizingSidebar(true); }}
+          ></div>
+      )}
 
       <div className={`flex-1 flex flex-col relative overflow-hidden min-w-0 ${isResizingSidebar || isResizingLogs ? 'pointer-events-none' : ''}`}>
         {/* Toolbar */}
-        <div className="h-14 border-b border-neutral-800 bg-neutral-900 flex items-center px-4 justify-between shrink-0 z-20">
-            <div className="flex items-center space-x-4">
-                <div className="flex flex-col">
-                  <span className="font-semibold text-neutral-300 text-sm">{fileName || "No File"}</span>
+        <div className="h-14 border-b border-neutral-800 bg-neutral-900 flex items-center px-4 justify-between shrink-0 z-20 relative shadow-md">
+            
+            {/* Left Group: Menu + Info */}
+            <div className="flex items-center space-x-3 overflow-hidden">
+                <button 
+                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                    className="p-2 -ml-2 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition-colors focus:outline-none"
+                    title={isSidebarOpen ? "Hide Sidebar" : "Show Sidebar"}
+                >
+                    <Menu className="w-5 h-5" />
+                </button>
+
+                <div className="flex flex-col truncate min-w-0">
+                  <span className="font-semibold text-neutral-300 text-sm truncate">{fileName || "No File"}</span>
                   {structure && (
-                    <span className="text-[10px] text-neutral-500">
-                       {structure.isMultipart ? 'Multipart' : 'Single Part'} • {rawPixelData ? `${rawPixelData.width}x${rawPixelData.height}` : ''}
+                    <span className="text-[10px] text-neutral-500 truncate">
+                       {structure.isMultipart ? 'Multipart' : 'Single'} • {rawPixelData ? `${rawPixelData.width}x${rawPixelData.height}` : ''}
                     </span>
                   )}
                 </div>
 
-                <div
-                  className={`px-2 py-1 rounded text-[10px] font-mono border ${
-                    rendererBackend === 'webgl2'
-                      ? 'bg-teal-900/20 border-teal-700/50 text-teal-300'
-                      : 'bg-amber-900/20 border-amber-700/50 text-amber-300'
-                  }`}
-                  title={rendererFallbackReason || undefined}
-                >
-                  <span className="opacity-60 mr-1">Renderer:</span>
-                  {rendererBackend === 'webgl2' ? 'WebGL2' : 'CPU fallback'}
-                </div>
+                {!isMobile && (
+                    <div
+                    className={`hidden md:flex px-2 py-1 rounded text-[10px] font-mono border ${
+                        rendererBackend === 'webgl2'
+                        ? 'bg-teal-900/20 border-teal-700/50 text-teal-300'
+                        : 'bg-amber-900/20 border-amber-700/50 text-amber-300'
+                    }`}
+                    title={rendererFallbackReason || undefined}
+                    >
+                    <span className="opacity-60 mr-1">Ren:</span>
+                    {rendererBackend === 'webgl2' ? 'GL2' : 'CPU'}
+                    </div>
+                )}
                 
-                {structure && (
-                  <div className="flex items-center space-x-1">
-                     <div className="px-2 py-1 bg-black/40 border border-red-900/50 rounded text-[10px] text-red-400 font-mono flex gap-1">
-                        <span className="opacity-50">R:</span> {channelMapping.r || '-'}
+                {structure && !isMobile && (
+                  <div className="hidden lg:flex items-center space-x-1">
+                     <div className="px-1.5 py-0.5 bg-black/40 border border-red-900/50 rounded text-[10px] text-red-400 font-mono">
+                        R:{channelMapping.r || '-'}
                      </div>
-                     <div className="px-2 py-1 bg-black/40 border border-green-900/50 rounded text-[10px] text-green-400 font-mono flex gap-1">
-                        <span className="opacity-50">G:</span> {channelMapping.g || '-'}
+                     <div className="px-1.5 py-0.5 bg-black/40 border border-green-900/50 rounded text-[10px] text-green-400 font-mono">
+                        G:{channelMapping.g || '-'}
                      </div>
-                     <div className="px-2 py-1 bg-black/40 border border-blue-900/50 rounded text-[10px] text-blue-400 font-mono flex gap-1">
-                        <span className="opacity-50">B:</span> {channelMapping.b || '-'}
+                     <div className="px-1.5 py-0.5 bg-black/40 border border-blue-900/50 rounded text-[10px] text-blue-400 font-mono">
+                        B:{channelMapping.b || '-'}
                      </div>
                   </div>
                 )}
             </div>
-            
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-4 bg-neutral-800/50 rounded-lg px-3 py-1 border border-neutral-700">
-                <div className="flex items-center space-x-2">
-                  <button 
-                    onClick={toggleExposure}
-                    className={`flex items-center justify-center p-1 rounded hover:bg-neutral-700 transition-colors ${exposure !== 0 ? 'text-teal-400' : 'text-neutral-400'}`}
-                    title={exposure === 0 ? "Toggle Exposure" : "Reset Exposure to 0"}
-                  >
-                      <Sun className="w-3.5 h-3.5" />
-                  </button>
-                  <span className="text-xs text-neutral-400">Exp:</span>
-                  <input 
-                      type="range" min="-10" max="10" step="0.01" 
-                      value={exposure} 
-                      onChange={(e) => setExposure(parseFloat(e.target.value))}
-                      className="w-24 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <span className="text-xs font-mono w-8 text-right">{exposure.toFixed(2)}</span>
-                </div>
-                <div className="w-px h-4 bg-neutral-700"></div>
-                <div className="flex items-center space-x-2">
-                  <button 
-                    onClick={toggleGamma}
-                    className={`flex items-center justify-center p-1 rounded hover:bg-neutral-700 transition-colors ${Math.abs(gamma - 2.2) > 0.01 ? 'text-teal-400' : 'text-neutral-400'}`}
-                    title={Math.abs(gamma - 2.2) < 0.01 ? "Toggle Gamma" : "Reset Gamma to 2.2"}
-                  >
-                      <Monitor className="w-3.5 h-3.5" />
-                  </button>
-                  <span className="text-xs text-neutral-400">Gamma:</span>
-                  <input 
-                      type="range" min="0.1" max="4.0" step="0.01" 
-                      value={gamma} 
-                      onChange={(e) => setGamma(parseFloat(e.target.value))}
-                      className="w-24 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <span className="text-xs font-mono w-8 text-right">{gamma.toFixed(2)}</span>
-                </div>
+
+            {/* Center Group: Tone Controls (Desktop) */}
+            {!isMobile && (
+              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+                {toneControls}
               </div>
-            </div>
+            )}
+            
+            {/* Right Group: Actions + Mobile Tone Controls */}
+            <div className={`flex items-center min-w-0 ${isMobile ? 'flex-1 justify-end ml-2' : 'ml-auto shrink-0'}`}>
+              {isMobile && toneControls}
+              {isMobile && <div className="h-6 w-px bg-neutral-800 mx-2 shrink-0"></div>}
+              
+              {!isMobile && (
+                <div className="flex items-center space-x-1 shrink-0">
+                  <button 
+                      onClick={fitView}
+                      className="p-1.5 rounded transition-colors bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700"
+                      title="Fit to Screen"
+                  >
+                      <Maximize className="w-4 h-4" />
+                  </button>
 
-            <div className="flex items-center space-x-2">
-              <div className="h-6 w-px bg-neutral-800 mx-2"></div>
-              <button 
-                onClick={fitView}
-                className="p-1.5 rounded transition-colors bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700"
-                title="Fit to Screen"
-              >
-                <Maximize className="w-4 h-4" />
-              </button>
+                  <button 
+                      onClick={() => setShowHistogram(!showHistogram)}
+                      className={`p-1.5 rounded transition-colors ${showHistogram ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'}`}
+                      title="Toggle Histogram"
+                  >
+                      <BarChart3 className="w-4 h-4" />
+                  </button>
 
-              <button 
-                onClick={() => setShowHistogram(!showHistogram)}
-                className={`p-1.5 rounded transition-colors ${showHistogram ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'}`}
-                title="Toggle Histogram"
-              >
-                <BarChart3 className="w-4 h-4" />
-              </button>
+                  <button 
+                      onClick={() => setIsInspectMode(!isInspectMode)}
+                      className={`p-1.5 rounded transition-colors ${isInspectMode ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'}`}
+                      title="Pixel Inspector Tool"
+                  >
+                      <Crosshair className="w-4 h-4" />
+                  </button>
 
-              <button 
-                onClick={() => setIsInspectMode(!isInspectMode)}
-                className={`p-1.5 rounded transition-colors ${isInspectMode ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'}`}
-                title="Pixel Inspector Tool"
-              >
-                <Crosshair className="w-4 h-4" />
-              </button>
+                  <button 
+                      onClick={() => setShowHelp(!showHelp)}
+                      className={`p-1.5 rounded transition-colors ${showHelp ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'}`}
+                      title="Help & Shortcuts"
+                  >
+                      <HelpCircle className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
 
-              <button 
-                onClick={() => setShowHelp(!showHelp)}
-                className={`p-1.5 rounded transition-colors ${showHelp ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'}`}
-                title="Help & Shortcuts"
-              >
-                <HelpCircle className="w-4 h-4" />
-              </button>
+              {isMobile && (
+                <div className="relative shrink-0">
+                  {isMobileActionsOpen && (
+                    <button
+                      className="fixed inset-0 z-30 cursor-default"
+                      onClick={() => setIsMobileActionsOpen(false)}
+                      aria-label="Close settings menu"
+                    />
+                  )}
+                  <button
+                    onClick={() => setIsMobileActionsOpen(prev => !prev)}
+                    className={`p-1.5 rounded transition-colors ${isMobileActionsOpen ? 'bg-teal-600 text-white' : 'bg-neutral-800 text-neutral-300 hover:text-white hover:bg-neutral-700'}`}
+                    title="View Settings"
+                  >
+                    <SlidersHorizontal className="w-4 h-4" />
+                  </button>
+
+                  {isMobileActionsOpen && (
+                    <div className="absolute right-0 top-full mt-2 z-40 w-44 rounded-lg border border-neutral-700 bg-neutral-900/95 backdrop-blur shadow-2xl p-1">
+                      <button
+                        onClick={() => { fitView(); setIsMobileActionsOpen(false); }}
+                        className="w-full flex items-center gap-2 px-2 py-2 rounded text-xs text-neutral-200 hover:bg-neutral-800"
+                      >
+                        <Maximize className="w-3.5 h-3.5" />
+                        Fit View
+                      </button>
+                      <button
+                        onClick={() => { setShowHistogram(prev => !prev); setIsMobileActionsOpen(false); }}
+                        className={`w-full flex items-center gap-2 px-2 py-2 rounded text-xs hover:bg-neutral-800 ${showHistogram ? 'text-teal-300' : 'text-neutral-200'}`}
+                      >
+                        <BarChart3 className="w-3.5 h-3.5" />
+                        Histogram
+                      </button>
+                      <button
+                        onClick={() => { setIsInspectMode(prev => !prev); setIsMobileActionsOpen(false); }}
+                        className={`w-full flex items-center gap-2 px-2 py-2 rounded text-xs hover:bg-neutral-800 ${isInspectMode ? 'text-teal-300' : 'text-neutral-200'}`}
+                      >
+                        <Crosshair className="w-3.5 h-3.5" />
+                        Inspector
+                      </button>
+                      <button
+                        onClick={() => { setShowHelp(prev => !prev); setIsMobileActionsOpen(false); }}
+                        className={`w-full flex items-center gap-2 px-2 py-2 rounded text-xs hover:bg-neutral-800 ${showHelp ? 'text-teal-300' : 'text-neutral-200'}`}
+                      >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        Help
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
         </div>
 
         {/* Canvas / Main View */}
         <div 
             ref={containerRef}
-            className={`flex-1 bg-neutral-950 relative overflow-hidden select-none ${isDragging ? 'cursor-grabbing' : isInspectMode ? 'cursor-crosshair' : 'cursor-default'}`}
+            className={`flex-1 bg-neutral-950 relative overflow-hidden select-none touch-none ${isDragging ? 'cursor-grabbing' : isInspectMode ? 'cursor-crosshair' : 'cursor-default'}`}
             onWheel={handleWheel}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseLeave}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
         >
           {!structure ? (
-              <div className="flex items-center justify-center h-full relative z-10">
-                  <DropZone onFileLoaded={handleFileLoaded} />
+              <div className="flex items-center justify-center h-full relative z-10 px-4">
+                  <DropZone onFileLoaded={handleFileLoaded} className="w-full max-w-md" />
               </div>
           ) : (
               <div 
@@ -771,7 +987,7 @@ export default function App() {
                   <canvas ref={canvasRef} className="block pointer-events-none" />
                   
                   {selectedPartId === null && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-neutral-400">
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-neutral-400 text-center px-4">
                           Select a part to decode
                       </div>
                   )}
@@ -814,6 +1030,7 @@ export default function App() {
                           <ul className="text-xs text-neutral-300 space-y-1 list-disc pl-4 marker:text-teal-500/50">
                               <li><strong>Scroll</strong> to zoom in/out.</li>
                               <li><strong>Left/Middle Drag</strong> to pan image.</li>
+                              <li><strong>Touch</strong>: Pinch to zoom, drag to pan.</li>
                               <li>Use <strong>Inspector</strong> tool for pixel values.</li>
                               <li>Click <strong>Sun/Monitor</strong> icons to toggle defaults.</li>
                           </ul>
@@ -831,20 +1048,13 @@ export default function App() {
           {inspectData && isInspectMode && (
               <PixelInspector {...inspectData} visible={true} />
           )}
-          
-          {/* Controls Help Hint */}
-          {structure && !isInspectMode && (
-              <div className="absolute bottom-4 left-4 z-10 text-[10px] text-neutral-600 bg-neutral-900/80 px-2 py-1 rounded border border-neutral-800 pointer-events-none">
-                  Scroll to Zoom • Left/Middle Click Drag to Pan
-              </div>
-          )}
 
           {/* Hidden Input for Toolbar Button */}
           <input
               type="file"
               ref={fileInputRef}
               className="hidden"
-              accept=".exr"
+              accept="*"
               onChange={handleGlobalFileInput}
           />
         </div>

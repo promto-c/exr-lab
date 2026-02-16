@@ -45,7 +45,7 @@ export const DropZone: React.FC<DropZoneProps> = ({ onFileLoaded, className }) =
       <input 
         ref={fileInputRef}
         type="file" 
-        accept=".exr" 
+        accept="*" 
         className="hidden" 
         onChange={onSelect} 
       />
