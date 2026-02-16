@@ -7,6 +7,7 @@ import { decodePizBlock } from './piz';
 import { decodeDwaBlock } from './dwa';
 import { decodeB44Block } from './b44';
 import { decodeRleBlock } from './rle';
+import { decodePxr24Block } from './pxr24';
 import { DecodeExrPartOptions, DecodedChannel, DecodedPart, ExrChannel, ExrPart, ExrStructure } from './types';
 
 const UINT32_MAX = 4294967295.0;
@@ -175,6 +176,15 @@ const SUPPORTED_COMPRESSION_HANDLERS = new Map<number, CompressionHandler>([
       name: COMPRESSION_NAMES[4],
       linesPerBlock: 32,
       decodeBlock: decodePizBlock,
+    },
+  ],
+  [
+    5,
+    {
+      compressionId: 5,
+      name: COMPRESSION_NAMES[5],
+      linesPerBlock: 16,
+      decodeBlock: decodePxr24Block,
     },
   ],
   [

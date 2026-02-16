@@ -252,6 +252,150 @@ function float32ToBytes(value: number): number[] {
   return [scratch.getUint8(0), scratch.getUint8(1), scratch.getUint8(2), scratch.getUint8(3)];
 }
 
+function float32ToUint32Bits(value: number): number {
+  const scratch = new DataView(new ArrayBuffer(4));
+  scratch.setFloat32(0, value, true);
+  return scratch.getUint32(0, true);
+}
+
+function uint32BitsToFloat32(value: number): number {
+  const scratch = new DataView(new ArrayBuffer(4));
+  scratch.setUint32(0, value >>> 0, true);
+  return scratch.getFloat32(0, true);
+}
+
+function floatBitsToFloat24Bits(bits: number): number {
+  const s = bits & 0x80000000;
+  const e = bits & 0x7f800000;
+  const m = bits & 0x007fffff;
+
+  let i = 0;
+  if (e === 0x7f800000) {
+    if (m !== 0) {
+      const reduced = m >>> 8;
+      i = (e >>> 8) | reduced | (reduced === 0 ? 1 : 0);
+    } else {
+      i = e >>> 8;
+    }
+  } else {
+    i = ((e | m) + (m & 0x00000080)) >>> 8;
+    if (i >= 0x7f8000) {
+      i = (e | m) >>> 8;
+    }
+  }
+
+  return ((s >>> 8) | i) >>> 0;
+}
+
+function pxr24QuantizeFloat(value: number): number {
+  const bits = float32ToUint32Bits(value);
+  const pxr24 = floatBitsToFloat24Bits(bits);
+  return uint32BitsToFloat32((pxr24 << 8) >>> 0);
+}
+
+function encodePxr24Block(
+  rawBlock: Uint8Array,
+  channels: TestChannel[],
+  xMin: number,
+  yMin: number,
+  xMax: number,
+  yMax: number,
+  chunkY: number,
+  linesPerBlock: number,
+): Uint8Array {
+  const view = new DataView(rawBlock.buffer, rawBlock.byteOffset, rawBlock.byteLength);
+  const out: number[] = [];
+
+  let rawPtr = 0;
+
+  for (let dy = 0; dy < linesPerBlock; dy++) {
+    const y = chunkY + dy;
+    if (y > yMax) break;
+
+    for (const channel of channels) {
+      const xSampling = channel.xSampling ?? 1;
+      const ySampling = channel.ySampling ?? 1;
+      const originY = firstSampleCoordinate(yMin, ySampling);
+      if (y < originY || (y - originY) % ySampling !== 0) {
+        continue;
+      }
+
+      const count = sampleCount(xMin, xMax, xSampling);
+
+      if (channel.pixelType === 1) {
+        const p0 = new Uint8Array(count);
+        const p1 = new Uint8Array(count);
+        let prev = 0;
+
+        for (let i = 0; i < count; i++) {
+          const pixel = view.getUint16(rawPtr, true);
+          rawPtr += 2;
+          const diff = (pixel - prev) >>> 0;
+          prev = pixel;
+          p0[i] = (diff >>> 8) & 0xff;
+          p1[i] = diff & 0xff;
+        }
+
+        out.push(...p0, ...p1);
+        continue;
+      }
+
+      if (channel.pixelType === 0) {
+        const p0 = new Uint8Array(count);
+        const p1 = new Uint8Array(count);
+        const p2 = new Uint8Array(count);
+        const p3 = new Uint8Array(count);
+        let prev = 0;
+
+        for (let i = 0; i < count; i++) {
+          const pixel = view.getUint32(rawPtr, true);
+          rawPtr += 4;
+          const diff = (pixel - prev) >>> 0;
+          prev = pixel;
+          p0[i] = (diff >>> 24) & 0xff;
+          p1[i] = (diff >>> 16) & 0xff;
+          p2[i] = (diff >>> 8) & 0xff;
+          p3[i] = diff & 0xff;
+        }
+
+        out.push(...p0, ...p1, ...p2, ...p3);
+        continue;
+      }
+
+      if (channel.pixelType === 2) {
+        const p0 = new Uint8Array(count);
+        const p1 = new Uint8Array(count);
+        const p2 = new Uint8Array(count);
+        let prev = 0;
+
+        for (let i = 0; i < count; i++) {
+          const bits = view.getUint32(rawPtr, true);
+          rawPtr += 4;
+          const pixel24 = floatBitsToFloat24Bits(bits);
+          const diff = (pixel24 - prev) >>> 0;
+          prev = pixel24;
+          p0[i] = (diff >>> 16) & 0xff;
+          p1[i] = (diff >>> 8) & 0xff;
+          p2[i] = diff & 0xff;
+        }
+
+        out.push(...p0, ...p1, ...p2);
+        continue;
+      }
+
+      throw new Error(`Unsupported test pixel type ${channel.pixelType}.`);
+    }
+  }
+
+  if (rawPtr !== rawBlock.byteLength) {
+    throw new Error('PXR24 test encoder consumed unexpected raw block length.');
+  }
+
+  const packed = Uint8Array.from(out);
+  const compressed = zlibSync(packed);
+  return compressed.byteLength >= rawBlock.byteLength ? rawBlock : compressed;
+}
+
 function encodeB44TransformedHalf(halfValue: number): number {
   if ((halfValue & 0x7c00) === 0x7c00) {
     return 0x8000;
@@ -562,7 +706,7 @@ function buildSinglePartExr(options: BuildOptions): ArrayBuffer {
 
   bytes.push(0); // end-of-header marker
 
-  const linesPerBlock = compression === 3 ? 16 : 1;
+  const linesPerBlock = compression === 3 || compression === 5 ? 16 : 1;
   const chunkCount = Math.ceil(height / linesPerBlock);
   const offsetTableStart = bytes.length;
 
@@ -620,6 +764,17 @@ function buildSinglePartExr(options: BuildOptions): ArrayBuffer {
       const predicted = applyPredictor(interleaved);
       const compressed = rleCompress(predicted);
       dataBytes = compressed.byteLength >= raw.byteLength ? raw : compressed;
+    } else if (compression === 5) {
+      dataBytes = encodePxr24Block(
+        Uint8Array.from(rawBlock),
+        channels,
+        xMin,
+        yMin,
+        xMax,
+        yMax,
+        chunkY,
+        linesPerBlock,
+      );
     } else {
       const interleaved = interleave(Uint8Array.from(rawBlock));
       const predicted = applyPredictor(interleaved);
@@ -805,6 +960,41 @@ describe('core EXR parser/decoder', () => {
       10.75, 11.75, 12.75,
       20.75, 21.75, 22.75,
     ]);
+  });
+
+  it('decodes synthetic PXR24 scanline fixture across UINT/HALF/FLOAT channels', () => {
+    const valuesF = [0.25, 1.25, 10.25, 11.25];
+    const buffer = buildSinglePartExr({
+      width: 2,
+      height: 2,
+      compression: 5,
+      channels: [
+        {
+          name: 'H',
+          pixelType: 1,
+          valueAt: (x, y) => (x + y) % 2,
+        },
+        {
+          name: 'F',
+          pixelType: 2,
+          valueAt: (x, y) => x + y * 10 + 0.25,
+        },
+        {
+          name: 'U',
+          pixelType: 0,
+          valueAt: (x, y) => ((x + y) % 2 === 0 ? 1 : 0),
+        },
+      ],
+    });
+
+    const structure = parseExrStructure(buffer);
+    expect(structure.parts).toHaveLength(1);
+    expect(structure.parts[0].compression).toBe(5);
+
+    const decoded = decodeExrPart(buffer, structure, { partId: 0 });
+    expect(Array.from(decoded.channels.H.data)).toEqual([0, 1, 1, 0]);
+    expect(Array.from(decoded.channels.U.data)).toEqual([1, 0, 0, 1]);
+    expect(Array.from(decoded.channels.F.data)).toEqual(valuesF.map((value) => pxr24QuantizeFloat(value)));
   });
 
   it('parses structure and decodes HALF/FLOAT/UINT channels across supported compressions', () => {
@@ -1077,7 +1267,7 @@ describe('core EXR parser/decoder', () => {
     const buffer = buildSinglePartExr({
       width: 1,
       height: 1,
-      compression: 5,
+      compression: 10,
       channels: [
         {
           name: 'R',
@@ -1173,6 +1363,36 @@ describe('core EXR parser/decoder', () => {
 
     expect(dataSize).toBeGreaterThan(1);
     bytes[dataPtr] = 127;
+
+    const corrupted = bytes.buffer;
+    const corruptedStructure = parseExrStructure(corrupted);
+    expectExrErrorCode(() => decodeExrPart(corrupted, corruptedStructure, { partId: 0 }), 'DECOMPRESSION_FAILED');
+  });
+
+  it('maps PXR24 decompression failures to DECOMPRESSION_FAILED', () => {
+    const valid = buildSinglePartExr({
+      width: 256,
+      height: 1,
+      compression: 5,
+      channels: [
+        {
+          name: 'U',
+          pixelType: 0,
+          valueAt: () => 1,
+        },
+      ],
+    });
+
+    const structure = parseExrStructure(valid);
+    const bytes = new Uint8Array(cloneBuffer(valid));
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const chunkOffset = Number(view.getBigUint64(structure.headerEndOffset, true));
+    const dataSize = view.getInt32(chunkOffset + 4, true);
+    const dataPtr = chunkOffset + 8;
+
+    expect(dataSize).toBeGreaterThan(2);
+    bytes[dataPtr] = 0;
+    bytes[dataPtr + 1] = 0;
 
     const corrupted = bytes.buffer;
     const corruptedStructure = parseExrStructure(corrupted);

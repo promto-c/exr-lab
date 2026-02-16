@@ -103,8 +103,8 @@ If a channel is subsampled (`xSampling > 1` or `ySampling > 1`), `data` stores o
 ## Supported today
 
 - Scanline EXR parts
-- Compression: `NO_COMPRESSION`, `RLE_COMPRESSION`, `ZIPS_COMPRESSION`, `ZIP_COMPRESSION`, `PIZ_COMPRESSION`, `B44_COMPRESSION`, `B44A_COMPRESSION`, `DWAA_COMPRESSION`, `DWAB_COMPRESSION`
-  - Decoder internals use a compression-handler registry so new codecs (for example `PXR24_COMPRESSION`) can be added as new handlers.
+- Compression: `NO_COMPRESSION`, `RLE_COMPRESSION`, `ZIPS_COMPRESSION`, `ZIP_COMPRESSION`, `PIZ_COMPRESSION`, `PXR24_COMPRESSION`, `B44_COMPRESSION`, `B44A_COMPRESSION`, `DWAA_COMPRESSION`, `DWAB_COMPRESSION`
+  - Decoder internals use a compression-handler registry so new codecs (for example `HTJ2K32_COMPRESSION`) can be added as new handlers.
 - Pixel types: `UINT`, `HALF`, `FLOAT`
 
 ## Not supported yet
