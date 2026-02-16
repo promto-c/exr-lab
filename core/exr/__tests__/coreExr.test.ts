@@ -180,6 +180,47 @@ function applyPredictor(data: Uint8Array): Uint8Array {
   return out;
 }
 
+function rleCompress(data: Uint8Array): Uint8Array {
+  const out: number[] = [];
+  const end = data.length;
+  let runs = 0;
+  let rune = runs + 1;
+
+  while (runs < end) {
+    let count = 0;
+    while (rune < end && data[runs] === data[rune] && count < 127) {
+      rune++;
+      count++;
+    }
+
+    if (count >= 2) {
+      out.push(count & 0xff);
+      out.push(data[runs]);
+      runs = rune;
+    } else {
+      count++;
+      while (
+        rune < end &&
+        ((rune + 1 >= end || data[rune] !== data[rune + 1]) ||
+          (rune + 2 >= end || data[rune + 1] !== data[rune + 2])) &&
+        count < 127
+      ) {
+        count++;
+        rune++;
+      }
+
+      out.push((-count) & 0xff);
+      while (runs < rune) {
+        out.push(data[runs++]);
+      }
+    }
+
+    rune++;
+  }
+
+  return Uint8Array.from(out);
+}
+
 function float32ToFloat16(value: number): number {
   if (Object.is(value, 0)) return 0;
 
@@ -573,6 +614,12 @@ function buildSinglePartExr(options: BuildOptions): ArrayBuffer {
     let dataBytes: Uint8Array;
     if (compression === 0) {
       dataBytes = Uint8Array.from(rawBlock);
+    } else if (compression === 1) {
+      const raw = Uint8Array.from(rawBlock);
+      const interleaved = interleave(Uint8Array.from(rawBlock));
+      const predicted = applyPredictor(interleaved);
+      const compressed = rleCompress(predicted);
+      dataBytes = compressed.byteLength >= raw.byteLength ? raw : compressed;
     } else {
       const interleaved = interleave(Uint8Array.from(rawBlock));
       const predicted = applyPredictor(interleaved);
@@ -761,7 +808,7 @@ describe('core EXR parser/decoder', () => {
   });
 
   it('parses structure and decodes HALF/FLOAT/UINT channels across supported compressions', () => {
-    for (const compression of [0, 2, 3]) {
+    for (const compression of [0, 1, 2, 3]) {
       const buffer = buildSinglePartExr({
         width: 2,
         height: 2,
@@ -1030,7 +1077,7 @@ describe('core EXR parser/decoder', () => {
     const buffer = buildSinglePartExr({
       width: 1,
       height: 1,
-      compression: 1,
+      compression: 5,
       channels: [
         {
           name: 'R',
@@ -1097,6 +1144,35 @@ describe('core EXR parser/decoder', () => {
     expect(dataSize).toBeGreaterThan(1);
     bytes[dataPtr] = 0;
     bytes[dataPtr + 1] = 0;
+
+    const corrupted = bytes.buffer;
+    const corruptedStructure = parseExrStructure(corrupted);
+    expectExrErrorCode(() => decodeExrPart(corrupted, corruptedStructure, { partId: 0 }), 'DECOMPRESSION_FAILED');
+  });
+
+  it('maps RLE decompression failures to DECOMPRESSION_FAILED', () => {
+    const valid = buildSinglePartExr({
+      width: 16,
+      height: 1,
+      compression: 1,
+      channels: [
+        {
+          name: 'R',
+          pixelType: 0,
+          valueAt: () => 1,
+        },
+      ],
+    });
+
+    const structure = parseExrStructure(valid);
+    const bytes = new Uint8Array(cloneBuffer(valid));
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const chunkOffset = Number(view.getBigUint64(structure.headerEndOffset, true));
+    const dataSize = view.getInt32(chunkOffset + 4, true);
+    const dataPtr = chunkOffset + 8;
+
+    expect(dataSize).toBeGreaterThan(1);
+    bytes[dataPtr] = 127;
 
     const corrupted = bytes.buffer;
     const corruptedStructure = parseExrStructure(corrupted);

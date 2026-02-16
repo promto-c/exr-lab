@@ -6,6 +6,7 @@ import { float16ToFloat32 } from './half';
 import { decodePizBlock } from './piz';
 import { decodeDwaBlock } from './dwa';
 import { decodeB44Block } from './b44';
+import { decodeRleBlock } from './rle';
 import { DecodeExrPartOptions, DecodedChannel, DecodedPart, ExrChannel, ExrPart, ExrStructure } from './types';
 
 const UINT32_MAX = 4294967295.0;
@@ -100,6 +101,7 @@ interface CompressionDecodeContext {
   buffer: ArrayBuffer;
   dataPtr: number;
   dataSize: number;
+  expectedUncompressedSize: number;
   part: ExrPart;
   partId: number;
   chunkIndex: number;
@@ -137,6 +139,15 @@ const SUPPORTED_COMPRESSION_HANDLERS = new Map<number, CompressionHandler>([
       name: COMPRESSION_NAMES[0],
       linesPerBlock: 1,
       decodeBlock: ({ buffer, dataPtr, dataSize }) => new Uint8Array(buffer, dataPtr, dataSize),
+    },
+  ],
+  [
+    1,
+    {
+      compressionId: 1,
+      name: COMPRESSION_NAMES[1],
+      linesPerBlock: 1,
+      decodeBlock: decodeRleBlock,
     },
   ],
   [
@@ -203,7 +214,6 @@ const SUPPORTED_COMPRESSION_HANDLERS = new Map<number, CompressionHandler>([
     },
   ],
 ]);
-// RLE_COMPRESSION (id 1) is intentionally not registered yet. Adding it next is a map entry + handler.
 
 interface ChannelDecodeMeta {
   channel: ExrChannel;
@@ -462,6 +472,7 @@ export function decodeExrPart(
             buffer,
             dataPtr,
             dataSize,
+            expectedUncompressedSize,
             part,
             partId: part.id,
             chunkIndex,
