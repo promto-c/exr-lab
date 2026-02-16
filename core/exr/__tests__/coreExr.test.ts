@@ -211,6 +211,264 @@ function float32ToBytes(value: number): number[] {
   return [scratch.getUint8(0), scratch.getUint8(1), scratch.getUint8(2), scratch.getUint8(3)];
 }
 
+function encodeB44TransformedHalf(halfValue: number): number {
+  if ((halfValue & 0x7c00) === 0x7c00) {
+    return 0x8000;
+  }
+  if ((halfValue & 0x8000) !== 0) {
+    return (~halfValue) & 0xffff;
+  }
+  return halfValue | 0x8000;
+}
+
+function encodeFlatB44Block14(halfValue: number): number[] {
+  const transformed = encodeB44TransformedHalf(halfValue);
+  return [
+    (transformed >> 8) & 0xff,
+    transformed & 0xff,
+    0x02,
+    0x08,
+    0x20,
+    0x82,
+    0x08,
+    0x20,
+    0x82,
+    0x08,
+    0x20,
+    0x82,
+    0x08,
+    0x20,
+  ];
+}
+
+function encodeFlatB44ABlock3(halfValue: number): number[] {
+  const transformed = encodeB44TransformedHalf(halfValue);
+  return [(transformed >> 8) & 0xff, transformed & 0xff, 0xfc];
+}
+
+function buildSinglePartFlatB44Exr(options: {
+  width: number;
+  height: number;
+  compression: 6 | 7;
+  value: number;
+  includeFloat?: boolean;
+}): ArrayBuffer {
+  const { width, height, compression, value, includeFloat = false } = options;
+  const xMin = 0;
+  const yMin = 0;
+  const xMax = width - 1;
+  const yMax = height - 1;
+
+  const bytes: number[] = [];
+
+  pushUint32LE(bytes, 20000630); // magic
+  pushUint32LE(bytes, 2); // version 2, no flags
+
+  const chlist: number[] = [];
+  writeCString(chlist, 'H');
+  pushInt32LE(chlist, 1); // HALF
+  chlist.push(0, 0, 0, 0); // pLinear + reserved
+  pushInt32LE(chlist, 1);
+  pushInt32LE(chlist, 1);
+  if (includeFloat) {
+    writeCString(chlist, 'F');
+    pushInt32LE(chlist, 2); // FLOAT
+    chlist.push(0, 0, 0, 0); // pLinear + reserved
+    pushInt32LE(chlist, 1);
+    pushInt32LE(chlist, 1);
+  }
+  chlist.push(0);
+
+  const writeAttribute = (name: string, type: string, payload: number[]) => {
+    writeCString(bytes, name);
+    writeCString(bytes, type);
+    pushInt32LE(bytes, payload.length);
+    bytes.push(...payload);
+  };
+
+  const windowPayload: number[] = [];
+  pushInt32LE(windowPayload, xMin);
+  pushInt32LE(windowPayload, yMin);
+  pushInt32LE(windowPayload, xMax);
+  pushInt32LE(windowPayload, yMax);
+
+  writeAttribute('channels', 'chlist', chlist);
+  writeAttribute('compression', 'compression', [compression]);
+  writeAttribute('dataWindow', 'box2i', windowPayload);
+  writeAttribute('displayWindow', 'box2i', windowPayload);
+  writeAttribute('lineOrder', 'lineOrder', [0, 0, 0, 0]);
+  bytes.push(0); // end-of-header marker
+
+  const linesPerBlock = 32;
+  const chunkCount = Math.ceil(height / linesPerBlock);
+  const offsetTableStart = bytes.length;
+
+  for (let i = 0; i < chunkCount; i++) {
+    bytes.push(0, 0, 0, 0, 0, 0, 0, 0);
+  }
+
+  const chunkOffsets: number[] = [];
+  const halfValue = float32ToFloat16(value);
+
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
+    const chunkY = yMin + chunkIndex * linesPerBlock;
+    const linesInChunk = Math.max(0, Math.min(linesPerBlock, yMax - chunkY + 1));
+    const blockCountX = Math.ceil(width / 4);
+    const blockCountY = Math.ceil(linesInChunk / 4);
+    const block =
+      compression === 7 ? encodeFlatB44ABlock3(halfValue) : encodeFlatB44Block14(halfValue);
+
+    const payload: number[] = [];
+    for (let i = 0; i < blockCountX * blockCountY; i++) {
+      payload.push(...block);
+    }
+    if (includeFloat) {
+      for (let y = 0; y < linesInChunk; y++) {
+        const worldY = chunkY + y;
+        for (let x = 0; x < width; x++) {
+          payload.push(...float32ToBytes(x + worldY * 10 + 0.25));
+        }
+      }
+    }
+
+    const chunkOffset = bytes.length;
+    chunkOffsets.push(chunkOffset);
+    pushInt32LE(bytes, chunkY);
+    pushInt32LE(bytes, payload.length);
+    bytes.push(...payload);
+  }
+
+  for (let i = 0; i < chunkOffsets.length; i++) {
+    const ptr = offsetTableStart + i * 8;
+    const offset = chunkOffsets[i];
+    bytes[ptr + 0] = offset & 0xff;
+    bytes[ptr + 1] = (offset >> 8) & 0xff;
+    bytes[ptr + 2] = (offset >> 16) & 0xff;
+    bytes[ptr + 3] = (offset >> 24) & 0xff;
+    bytes[ptr + 4] = 0;
+    bytes[ptr + 5] = 0;
+    bytes[ptr + 6] = 0;
+    bytes[ptr + 7] = 0;
+  }
+
+  return Uint8Array.from(bytes).buffer;
+}
+
+function buildSinglePartRawB44LikeExr(options: {
+  width: number;
+  height: number;
+  compression: 6 | 7;
+  channels: TestChannel[];
+}): ArrayBuffer {
+  const { width, height, compression, channels } = options;
+  const xMin = 0;
+  const yMin = 0;
+  const xMax = width - 1;
+  const yMax = height - 1;
+
+  const bytes: number[] = [];
+  pushUint32LE(bytes, 20000630); // magic
+  pushUint32LE(bytes, 2); // version 2, no flags
+
+  const chlist: number[] = [];
+  for (const channel of channels) {
+    writeCString(chlist, channel.name);
+    pushInt32LE(chlist, channel.pixelType);
+    chlist.push(0, 0, 0, 0); // pLinear + reserved
+    pushInt32LE(chlist, channel.xSampling ?? 1);
+    pushInt32LE(chlist, channel.ySampling ?? 1);
+  }
+  chlist.push(0);
+
+  const writeAttribute = (name: string, type: string, payload: number[]) => {
+    writeCString(bytes, name);
+    writeCString(bytes, type);
+    pushInt32LE(bytes, payload.length);
+    bytes.push(...payload);
+  };
+
+  const windowPayload: number[] = [];
+  pushInt32LE(windowPayload, xMin);
+  pushInt32LE(windowPayload, yMin);
+  pushInt32LE(windowPayload, xMax);
+  pushInt32LE(windowPayload, yMax);
+
+  writeAttribute('channels', 'chlist', chlist);
+  writeAttribute('compression', 'compression', [compression]);
+  writeAttribute('dataWindow', 'box2i', windowPayload);
+  writeAttribute('displayWindow', 'box2i', windowPayload);
+  writeAttribute('lineOrder', 'lineOrder', [0, 0, 0, 0]);
+  bytes.push(0); // end-of-header marker
+
+  const linesPerBlock = 32;
+  const chunkCount = Math.ceil(height / linesPerBlock);
+  const offsetTableStart = bytes.length;
+
+  for (let i = 0; i < chunkCount; i++) {
+    bytes.push(0, 0, 0, 0, 0, 0, 0, 0);
+  }
+
+  const chunkOffsets: number[] = [];
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
+    const chunkY = yMin + chunkIndex * linesPerBlock;
+    const rawBlock: number[] = [];
+
+    for (let dy = 0; dy < linesPerBlock; dy++) {
+      const y = chunkY + dy;
+      if (y > yMax) break;
+
+      for (const channel of channels) {
+        const xSampling = channel.xSampling ?? 1;
+        const ySampling = channel.ySampling ?? 1;
+        const originY = firstSampleCoordinate(yMin, ySampling);
+
+        if (y < originY || (y - originY) % ySampling !== 0) {
+          continue;
+        }
+
+        const originX = firstSampleCoordinate(xMin, xSampling);
+        const count = sampleCount(xMin, xMax, xSampling);
+
+        for (let sx = 0; sx < count; sx++) {
+          const x = originX + sx * xSampling;
+          const value = channel.valueAt(x, y);
+
+          if (channel.pixelType === 1) {
+            const encoded = float32ToFloat16(value);
+            rawBlock.push(encoded & 0xff, (encoded >> 8) & 0xff);
+          } else if (channel.pixelType === 2) {
+            rawBlock.push(...float32ToBytes(value));
+          } else {
+            const asUint = Math.round(Math.max(0, Math.min(1, value)) * UINT32_MAX);
+            pushUint32LE(rawBlock, asUint);
+          }
+        }
+      }
+    }
+
+    const chunkOffset = bytes.length;
+    chunkOffsets.push(chunkOffset);
+    pushInt32LE(bytes, chunkY);
+    pushInt32LE(bytes, rawBlock.length);
+    bytes.push(...rawBlock);
+  }
+
+  for (let i = 0; i < chunkOffsets.length; i++) {
+    const ptr = offsetTableStart + i * 8;
+    const offset = chunkOffsets[i];
+    bytes[ptr + 0] = offset & 0xff;
+    bytes[ptr + 1] = (offset >> 8) & 0xff;
+    bytes[ptr + 2] = (offset >> 16) & 0xff;
+    bytes[ptr + 3] = (offset >> 24) & 0xff;
+    bytes[ptr + 4] = 0;
+    bytes[ptr + 5] = 0;
+    bytes[ptr + 6] = 0;
+    bytes[ptr + 7] = 0;
+  }
+
+  return Uint8Array.from(bytes).buffer;
+}
+
 function buildSinglePartExr(options: BuildOptions): ArrayBuffer {
   const { width, height, compression, channels, extraAttributes = [] } = options;
   const xMin = 0;
@@ -400,6 +658,107 @@ describe('core EXR parser/decoder', () => {
       }
     }
   }, 90000);
+
+  it('decodes a synthetic B44 scanline fixture', () => {
+    const buffer = buildSinglePartFlatB44Exr({
+      width: 2,
+      height: 2,
+      compression: 6,
+      value: 1,
+    });
+
+    const structure = parseExrStructure(buffer);
+    expect(structure.parts).toHaveLength(1);
+    expect(structure.parts[0].compression).toBe(6);
+
+    const decoded = decodeExrPart(buffer, structure, { partId: 0 });
+    expect(decoded.width).toBe(2);
+    expect(decoded.height).toBe(2);
+    expect(Array.from(decoded.channels.H.data)).toEqual([1, 1, 1, 1]);
+  });
+
+  it('decodes a synthetic B44 scanline fixture with mixed HALF/FLOAT channels', () => {
+    const buffer = buildSinglePartFlatB44Exr({
+      width: 2,
+      height: 2,
+      compression: 6,
+      value: 1,
+      includeFloat: true,
+    });
+
+    const structure = parseExrStructure(buffer);
+    expect(structure.parts).toHaveLength(1);
+    expect(structure.parts[0].compression).toBe(6);
+    expect(structure.parts[0].channels).toHaveLength(2);
+
+    const decoded = decodeExrPart(buffer, structure, { partId: 0 });
+    expect(Array.from(decoded.channels.H.data)).toEqual([1, 1, 1, 1]);
+    expect(Array.from(decoded.channels.F.data)).toEqual([0.25, 1.25, 10.25, 11.25]);
+  });
+
+  it('decodes a synthetic B44A scanline fixture', () => {
+    const buffer = buildSinglePartFlatB44Exr({
+      width: 2,
+      height: 2,
+      compression: 7,
+      value: 0.5,
+    });
+
+    const structure = parseExrStructure(buffer);
+    expect(structure.parts).toHaveLength(1);
+    expect(structure.parts[0].compression).toBe(7);
+
+    const decoded = decodeExrPart(buffer, structure, { partId: 0 });
+    expect(decoded.width).toBe(2);
+    expect(decoded.height).toBe(2);
+    expect(Array.from(decoded.channels.H.data)).toEqual([0.5, 0.5, 0.5, 0.5]);
+  });
+
+  it('treats B44A chunks as raw scanline payload when packed size matches expected size', () => {
+    const buffer = buildSinglePartRawB44LikeExr({
+      width: 3,
+      height: 3,
+      compression: 7,
+      channels: [
+        {
+          name: 'B',
+          pixelType: 2,
+          valueAt: (x, y) => x + y * 10 + 0.25,
+        },
+        {
+          name: 'G',
+          pixelType: 2,
+          valueAt: (x, y) => x + y * 10 + 0.5,
+        },
+        {
+          name: 'R',
+          pixelType: 2,
+          valueAt: (x, y) => x + y * 10 + 0.75,
+        },
+      ],
+    });
+
+    const structure = parseExrStructure(buffer);
+    expect(structure.parts).toHaveLength(1);
+    expect(structure.parts[0].compression).toBe(7);
+
+    const decoded = decodeExrPart(buffer, structure, { partId: 0 });
+    expect(Array.from(decoded.channels.B.data)).toEqual([
+      0.25, 1.25, 2.25,
+      10.25, 11.25, 12.25,
+      20.25, 21.25, 22.25,
+    ]);
+    expect(Array.from(decoded.channels.G.data)).toEqual([
+      0.5, 1.5, 2.5,
+      10.5, 11.5, 12.5,
+      20.5, 21.5, 22.5,
+    ]);
+    expect(Array.from(decoded.channels.R.data)).toEqual([
+      0.75, 1.75, 2.75,
+      10.75, 11.75, 12.75,
+      20.75, 21.75, 22.75,
+    ]);
+  });
 
   it('parses structure and decodes HALF/FLOAT/UINT channels across supported compressions', () => {
     for (const compression of [0, 2, 3]) {

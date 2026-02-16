@@ -5,6 +5,7 @@ import { ExrEvent, ExrEventCallback } from './events';
 import { float16ToFloat32 } from './half';
 import { decodePizBlock } from './piz';
 import { decodeDwaBlock } from './dwa';
+import { decodeB44Block } from './b44';
 import { DecodeExrPartOptions, DecodedChannel, DecodedPart, ExrChannel, ExrPart, ExrStructure } from './types';
 
 const UINT32_MAX = 4294967295.0;
@@ -166,6 +167,24 @@ const SUPPORTED_COMPRESSION_HANDLERS = new Map<number, CompressionHandler>([
     },
   ],
   [
+    6,
+    {
+      compressionId: 6,
+      name: COMPRESSION_NAMES[6],
+      linesPerBlock: 32,
+      decodeBlock: decodeB44Block,
+    },
+  ],
+  [
+    7,
+    {
+      compressionId: 7,
+      name: COMPRESSION_NAMES[7],
+      linesPerBlock: 32,
+      decodeBlock: decodeB44Block,
+    },
+  ],
+  [
     8,
     {
       compressionId: 8,
@@ -220,6 +239,42 @@ function buildChannelMeta(part: ExrPart): ChannelDecodeMeta[] {
       data: new Float32Array(sampledWidth * sampledHeight),
     };
   });
+}
+
+function getExpectedUncompressedChunkSize(
+  part: ExrPart,
+  channelMeta: ChannelDecodeMeta[],
+  chunkY: number,
+  linesPerBlock: number,
+): number {
+  if (!part.dataWindow) return 0;
+
+  let expected = 0;
+
+  for (let dy = 0; dy < linesPerBlock; dy++) {
+    const y = chunkY + dy;
+    if (y > part.dataWindow.yMax) {
+      break;
+    }
+    if (y < part.dataWindow.yMin) {
+      continue;
+    }
+
+    for (const meta of channelMeta) {
+      if (meta.sampledWidth === 0 || meta.sampledHeight === 0) {
+        continue;
+      }
+
+      const ySampling = meta.channel.ySampling > 0 ? meta.channel.ySampling : 1;
+      if (!isSampledCoordinate(y, meta.sampleOriginY, ySampling)) {
+        continue;
+      }
+
+      expected += meta.sampledWidth * meta.bytesPerSample;
+    }
+  }
+
+  return expected;
 }
 
 function decodeValue(view: DataView, byteOffset: number, pixelType: number): number {
@@ -392,16 +447,27 @@ export function decodeExrPart(
 
     const linesInChunk = Math.max(0, Math.min(linesPerBlock, part.dataWindow.yMax - chunkY + 1));
 
-    const blockData = compressionHandler.decodeBlock({
-      buffer,
-      dataPtr,
-      dataSize,
+    const expectedUncompressedSize = getExpectedUncompressedChunkSize(
       part,
-      partId: part.id,
-      chunkIndex,
+      channelMeta,
       chunkY,
-      linesInChunk,
-    });
+      linesPerBlock,
+    );
+
+    // OpenEXR chunks may be stored raw when compression is ineffective.
+    const blockData =
+      dataSize === expectedUncompressedSize
+        ? new Uint8Array(buffer, dataPtr, dataSize)
+        : compressionHandler.decodeBlock({
+            buffer,
+            dataPtr,
+            dataSize,
+            part,
+            partId: part.id,
+            chunkIndex,
+            chunkY,
+            linesInChunk,
+          });
 
     bytesRead += dataSize;
 
