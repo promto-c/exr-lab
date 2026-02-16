@@ -114,8 +114,6 @@ export default function App() {
 
   // Touch State
   const lastTouchRef = React.useRef<{x: number, y: number}[] | null>(null);
-  const initialPinchDistanceRef = React.useRef<number | null>(null);
-  const initialScaleRef = React.useRef<number>(1);
 
   // Help State
   const [showHelp, setShowHelp] = React.useState(false);
@@ -152,12 +150,31 @@ export default function App() {
       return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Prevent default touch actions on canvas container
+  const canInteractWithViewport = Boolean(structure && rawPixelData);
+  const isViewportUiTarget = React.useCallback((target: EventTarget | null) => {
+    const element =
+      target instanceof Element
+        ? target
+        : target instanceof Node
+          ? target.parentElement
+          : null;
+    if (!element) return false;
+    return Boolean(
+      element.closest('button, input, select, textarea, a, label, [role="button"], [data-touch-ui="true"]')
+    );
+  }, []);
+
+  // Prevent native page gestures while interacting with the loaded viewport
   React.useEffect(() => {
+    if (!canInteractWithViewport) return;
+
     const el = containerRef.current;
     if (!el) return;
     
-    const preventDefault = (e: TouchEvent) => e.preventDefault();
+    const preventDefault = (e: TouchEvent) => {
+      if (isViewportUiTarget(e.target)) return;
+      e.preventDefault();
+    };
     el.addEventListener('touchstart', preventDefault, { passive: false });
     el.addEventListener('touchmove', preventDefault, { passive: false });
     
@@ -165,7 +182,7 @@ export default function App() {
         el.removeEventListener('touchstart', preventDefault);
         el.removeEventListener('touchmove', preventDefault);
     };
-  }, []);
+  }, [canInteractWithViewport, isViewportUiTarget]);
 
   // Resize Handlers (Desktop)
   React.useEffect(() => {
@@ -603,27 +620,35 @@ export default function App() {
 
   // --- Touch Handlers (Zoom/Pan) ---
   const handleTouchStart = (e: React.TouchEvent) => {
+      if (isViewportUiTarget(e.target)) {
+          setIsDragging(false);
+          lastTouchRef.current = null;
+          return;
+      }
+
       if (e.touches.length === 1) {
           lastTouchRef.current = [{x: e.touches[0].clientX, y: e.touches[0].clientY}];
           setIsDragging(true);
-      } else if (e.touches.length === 2) {
+          return;
+      }
+
+      if (e.touches.length === 2) {
           const t1 = e.touches[0];
           const t2 = e.touches[1];
-          const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-          initialPinchDistanceRef.current = dist;
-          initialScaleRef.current = viewTransform.scale;
           lastTouchRef.current = [
               {x: t1.clientX, y: t1.clientY},
               {x: t2.clientX, y: t2.clientY}
           ];
+          setIsDragging(false);
       }
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
       // Native scroll prevention is handled by non-passive listener in useEffect
+      if (isViewportUiTarget(e.target)) return;
 
       // Pan (1 finger)
-      if (e.touches.length === 1 && isDragging && lastTouchRef.current && lastTouchRef.current.length === 1) {
+      if (e.touches.length === 1 && lastTouchRef.current && lastTouchRef.current.length === 1) {
           const dx = e.touches[0].clientX - lastTouchRef.current[0].x;
           const dy = e.touches[0].clientY - lastTouchRef.current[0].y;
           
@@ -634,43 +659,79 @@ export default function App() {
           }));
           
           lastTouchRef.current = [{x: e.touches[0].clientX, y: e.touches[0].clientY}];
+          return;
       } 
-      // Zoom (2 fingers)
-      else if (e.touches.length === 2 && initialPinchDistanceRef.current && lastTouchRef.current && lastTouchRef.current.length === 2) {
+
+      // Pan + Zoom (2 fingers)
+      if (e.touches.length === 2 && lastTouchRef.current && lastTouchRef.current.length === 2) {
+          const prevT1 = lastTouchRef.current[0];
+          const prevT2 = lastTouchRef.current[1];
           const t1 = e.touches[0];
           const t2 = e.touches[1];
-          const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-          
-          if (initialPinchDistanceRef.current > 0) {
-              const scaleFactor = currentDist / initialPinchDistanceRef.current;
-              let newScale = initialScaleRef.current * scaleFactor;
-              
-              if (newScale < 0.005) newScale = 0.005;
-              if (newScale > 50) newScale = 50;
-              
-              const cx = (t1.clientX + t2.clientX) / 2;
-              const cy = (t1.clientY + t2.clientY) / 2;
-              
-              const rect = containerRef.current!.getBoundingClientRect();
-              const mx = cx - rect.left;
-              const my = cy - rect.top;
-              
-              // Zoom toward center of pinch
-              const imageX = (mx - viewTransform.x) / viewTransform.scale;
-              const imageY = (my - viewTransform.y) / viewTransform.scale;
-              
-              const newX = mx - imageX * newScale;
-              const newY = my - imageY * newScale;
 
-              setViewTransform({ x: newX, y: newY, scale: newScale });
+          const prevDist = Math.hypot(prevT1.x - prevT2.x, prevT1.y - prevT2.y);
+          const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+
+          if (prevDist > 0) {
+              const scaleFactor = currentDist / prevDist;
+              const prevCenterX = (prevT1.x + prevT2.x) / 2;
+              const prevCenterY = (prevT1.y + prevT2.y) / 2;
+              const currentCenterX = (t1.clientX + t2.clientX) / 2;
+              const currentCenterY = (t1.clientY + t2.clientY) / 2;
+
+              setViewTransform(prev => {
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect) return prev;
+
+                  let newScale = prev.scale * scaleFactor;
+                  if (newScale < 0.005) newScale = 0.005;
+                  if (newScale > 50) newScale = 50;
+
+                  const prevMx = prevCenterX - rect.left;
+                  const prevMy = prevCenterY - rect.top;
+                  const mx = currentCenterX - rect.left;
+                  const my = currentCenterY - rect.top;
+
+                  // Keep the image point under the previous pinch center under the new center.
+                  const imageX = (prevMx - prev.x) / prev.scale;
+                  const imageY = (prevMy - prev.y) / prev.scale;
+
+                  return {
+                      x: mx - imageX * newScale,
+                      y: my - imageY * newScale,
+                      scale: newScale
+                  };
+              });
           }
+
+          lastTouchRef.current = [
+              {x: t1.clientX, y: t1.clientY},
+              {x: t2.clientX, y: t2.clientY}
+          ];
+          setIsDragging(false);
       }
   };
 
-  const handleTouchEnd = () => {
+  const handleTouchEnd = (e: React.TouchEvent) => {
+      if (e.touches.length === 1) {
+          lastTouchRef.current = [{x: e.touches[0].clientX, y: e.touches[0].clientY}];
+          setIsDragging(true);
+          return;
+      }
+
+      if (e.touches.length === 2) {
+          const t1 = e.touches[0];
+          const t2 = e.touches[1];
+          lastTouchRef.current = [
+              {x: t1.clientX, y: t1.clientY},
+              {x: t2.clientX, y: t2.clientY}
+          ];
+          setIsDragging(false);
+          return;
+      }
+
       setIsDragging(false);
       lastTouchRef.current = null;
-      initialPinchDistanceRef.current = null;
   };
 
   // Compute inspector values for rendering
@@ -743,7 +804,16 @@ export default function App() {
   );
 
   return (
-    <div className="flex h-screen w-screen bg-neutral-950 text-neutral-200 font-sans overflow-hidden">
+    <div
+      className="flex h-screen w-screen box-border bg-neutral-950 text-neutral-200 font-sans overflow-hidden"
+      style={{
+        height: '100dvh',
+        paddingTop: isMobile ? 'env(safe-area-inset-top)' : '0px',
+        paddingBottom: isMobile ? 'env(safe-area-inset-bottom)' : '0px',
+        paddingLeft: isMobile ? 'env(safe-area-inset-left)' : '0px',
+        paddingRight: isMobile ? 'env(safe-area-inset-right)' : '0px',
+      }}
+    >
       
       {/* Sidebar Backdrop (Mobile Only) */}
       {isMobile && isSidebarOpen && (
@@ -961,15 +1031,16 @@ export default function App() {
         {/* Canvas / Main View */}
         <div 
             ref={containerRef}
-            className={`flex-1 bg-neutral-950 relative overflow-hidden select-none touch-none ${isDragging ? 'cursor-grabbing' : isInspectMode ? 'cursor-crosshair' : 'cursor-default'}`}
-            onWheel={handleWheel}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseLeave}
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
+            className={`flex-1 bg-neutral-950 relative overflow-hidden select-none ${canInteractWithViewport ? 'touch-none' : 'touch-auto'} ${isDragging ? 'cursor-grabbing' : isInspectMode ? 'cursor-crosshair' : 'cursor-default'}`}
+            onWheel={canInteractWithViewport ? handleWheel : undefined}
+            onMouseDown={canInteractWithViewport ? handleMouseDown : undefined}
+            onMouseMove={canInteractWithViewport ? handleMouseMove : undefined}
+            onMouseUp={canInteractWithViewport ? handleMouseUp : undefined}
+            onMouseLeave={canInteractWithViewport ? handleMouseLeave : undefined}
+            onTouchStart={canInteractWithViewport ? handleTouchStart : undefined}
+            onTouchMove={canInteractWithViewport ? handleTouchMove : undefined}
+            onTouchEnd={canInteractWithViewport ? handleTouchEnd : undefined}
+            onTouchCancel={canInteractWithViewport ? handleTouchEnd : undefined}
         >
           {!structure ? (
               <div className="flex items-center justify-center h-full relative z-10 px-4">
@@ -1004,7 +1075,7 @@ export default function App() {
 
           {/* Help Overlay */}
           {showHelp && (
-              <div className="absolute top-4 right-4 z-50 w-72 bg-neutral-900/95 backdrop-blur border border-neutral-800 shadow-2xl rounded-lg p-4 animate-in fade-in slide-in-from-top-2 text-left">
+              <div data-touch-ui="true" className="absolute top-4 right-4 z-50 w-72 bg-neutral-900/95 backdrop-blur border border-neutral-800 shadow-2xl rounded-lg p-4 animate-in fade-in slide-in-from-top-2 text-left">
                   <div className="flex justify-between items-start mb-3">
                       <h3 className="text-sm font-bold text-neutral-200 flex items-center">
                           <HelpCircle className="w-4 h-4 mr-2 text-teal-500"/> 

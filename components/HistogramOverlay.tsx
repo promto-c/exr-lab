@@ -10,7 +10,7 @@ export const HistogramOverlay: React.FC<HistogramOverlayProps> = ({ data, onClos
   const max = Math.max(...data, 1); // Avoid div by zero
 
   return (
-    <div className="absolute bottom-4 right-4 bg-neutral-900/40 border border-neutral-800 p-4 rounded-lg shadow-xl backdrop-blur-sm w-64 animate-in fade-in slide-in-from-bottom-2 z-20">
+    <div data-touch-ui="true" className="absolute bottom-4 right-4 bg-neutral-900/40 border border-neutral-800 p-4 rounded-lg shadow-xl backdrop-blur-sm w-64 animate-in fade-in slide-in-from-bottom-2 z-20">
       <div className="flex items-center justify-between mb-3">
         <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-400 flex items-center">
           <BarChart3 className="w-3 h-3 mr-2" /> Luminance
