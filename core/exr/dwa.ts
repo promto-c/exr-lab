@@ -26,6 +26,17 @@ const RLE = 2;
 
 const LOG_BASE = Math.pow(2.7182818, 2.2);
 const TEXT_DECODER = new TextDecoder();
+const DCT_A = 0.5 * Math.cos(Math.PI / 4.0);
+const DCT_B = 0.5 * Math.cos(Math.PI / 16.0);
+const DCT_C = 0.5 * Math.cos(Math.PI / 8.0);
+const DCT_D = 0.5 * Math.cos((3.0 * Math.PI) / 16.0);
+const DCT_E = 0.5 * Math.cos((5.0 * Math.PI) / 16.0);
+const DCT_F = 0.5 * Math.cos((3.0 * Math.PI) / 8.0);
+const DCT_G = 0.5 * Math.cos((7.0 * Math.PI) / 16.0);
+
+const FLOAT32_TO_FLOAT16_SCRATCH = new ArrayBuffer(4);
+const FLOAT32_TO_FLOAT16_FLOAT_VIEW = new Float32Array(FLOAT32_TO_FLOAT16_SCRATCH);
+const FLOAT32_TO_FLOAT16_INT_VIEW = new Uint32Array(FLOAT32_TO_FLOAT16_SCRATCH);
 
 interface Cursor {
   value: number;
@@ -488,67 +499,110 @@ function hufUncompress(input: Uint8Array, view: DataView, cursor: Cursor, nCompr
 
 // --- End Huffman helpers ----------------------------------------------------
 
-function undoPredictor(data: Uint8Array) {
-  for (let i = 1; i < data.length; i++) {
-    data[i] = (data[i - 1] + data[i] - 128) & 0xff;
-  }
+interface DwaZipScratch {
+  inflate: Uint8Array;
+  output: Uint8Array;
 }
 
-function undoInterleave(data: Uint8Array): Uint8Array {
-  const length = data.length;
-  const output = new Uint8Array(length);
-  const half = Math.floor((length + 1) / 2);
+const DWA_DC_SCRATCH: DwaZipScratch = {
+  inflate: new Uint8Array(0),
+  output: new Uint8Array(0),
+};
 
-  let even = 0;
-  let odd = half;
-  for (let i = 0; i < length; i++) {
-    if ((i & 1) === 0) {
-      output[i] = data[even++];
-    } else {
-      output[i] = data[odd++];
-    }
+function undoZipPredictorAndInterleave(data: Uint8Array, output: Uint8Array): Uint8Array {
+  const length = data.length;
+  if (length === 0) {
+    return data;
+  }
+
+  const half = (length + 1) >> 1;
+  let predicted = data[0];
+  output[0] = predicted;
+
+  for (let i = 1; i < half; i++) {
+    predicted = (predicted + data[i] - 128) & 0xff;
+    output[i << 1] = predicted;
+  }
+
+  for (let i = half; i < length; i++) {
+    predicted = (predicted + data[i] - 128) & 0xff;
+    output[((i - half) << 1) + 1] = predicted;
   }
 
   return output;
 }
 
-function uncompressZipStyle(input: Uint8Array, offset: number, size: number): Uint8Array {
+function ensureDwaScratchBuffer(buffer: Uint8Array, size: number): Uint8Array {
+  return buffer.byteLength >= size ? buffer.subarray(0, size) : new Uint8Array(size);
+}
+
+function uncompressZipStyle(
+  input: Uint8Array,
+  offset: number,
+  size: number,
+  expectedUncompressedSize: number,
+  scratch: DwaZipScratch,
+): Uint8Array {
   if (size < 0 || offset < 0 || offset + size > input.length) {
     throw new Error('Invalid DWA ZIP payload bounds.');
   }
 
   const compressed = input.subarray(offset, offset + size);
-  const raw = unzlibSync(compressed);
-  undoPredictor(raw);
-  return undoInterleave(raw);
+  const inflateOut =
+    expectedUncompressedSize > 0
+      ? ensureDwaScratchBuffer(scratch.inflate, expectedUncompressedSize)
+      : scratch.inflate;
+  if (expectedUncompressedSize > 0 && inflateOut !== scratch.inflate) {
+    scratch.inflate = inflateOut;
+  }
+
+  const raw = expectedUncompressedSize > 0 ? unzlibSync(compressed, { out: inflateOut }) : unzlibSync(compressed);
+
+  const outputBuffer = ensureDwaScratchBuffer(scratch.output, raw.byteLength);
+  if (outputBuffer !== scratch.output) {
+    scratch.output = outputBuffer;
+  }
+
+  return undoZipPredictorAndInterleave(raw, outputBuffer);
 }
 
-function decodeRunLength(input: Uint8Array): Uint8Array {
-  let size = input.byteLength;
-  const out: number[] = [];
-  let ptr = 0;
+function decodeRunLength(input: Uint8Array, expectedSize: number): Uint8Array {
+  if (expectedSize < 0) {
+    throw new Error('Invalid DWA RLE expected size.');
+  }
 
-  while (size > 0) {
+  const out = new Uint8Array(expectedSize);
+  let ptr = 0;
+  let outPtr = 0;
+
+  while (ptr < input.byteLength) {
     const length = (input[ptr] << 24) >> 24;
     ptr += 1;
 
     if (length < 0) {
       const count = -length;
-      size -= count + 1;
-      for (let i = 0; i < count; i++) {
-        out.push(input[ptr++]);
+      if (ptr + count > input.byteLength || outPtr + count > out.byteLength) {
+        throw new Error('Invalid DWA RLE payload bounds.');
       }
+      out.set(input.subarray(ptr, ptr + count), outPtr);
+      ptr += count;
+      outPtr += count;
     } else {
       const count = length + 1;
-      size -= 2;
-      const value = input[ptr++];
-      for (let i = 0; i < count; i++) {
-        out.push(value);
+      if (ptr >= input.byteLength || outPtr + count > out.byteLength) {
+        throw new Error('Invalid DWA RLE payload bounds.');
       }
+      const value = input[ptr++];
+      out.fill(value, outPtr, outPtr + count);
+      outPtr += count;
     }
   }
 
-  return Uint8Array.from(out);
+  if (outPtr !== out.byteLength) {
+    throw new Error('Invalid DWA RLE payload length.');
+  }
+
+  return out;
 }
 
 function unRleAC(currAc: Cursor, acBuffer: Uint16Array, halfZigBlock: Uint16Array) {
@@ -644,81 +698,85 @@ function unZigZag(src: Uint16Array, dst: Float32Array) {
 }
 
 function dctInverse(data: Float32Array) {
-  const a = 0.5 * Math.cos(Math.PI / 4.0);
-  const b = 0.5 * Math.cos(Math.PI / 16.0);
-  const c = 0.5 * Math.cos(Math.PI / 8.0);
-  const d = 0.5 * Math.cos((3.0 * Math.PI) / 16.0);
-  const e = 0.5 * Math.cos((5.0 * Math.PI) / 16.0);
-  const f = 0.5 * Math.cos((3.0 * Math.PI) / 8.0);
-  const g = 0.5 * Math.cos((7.0 * Math.PI) / 16.0);
-
-  const alpha = new Float32Array(4);
-  const beta = new Float32Array(4);
-  const theta = new Float32Array(4);
-  const gamma = new Float32Array(4);
-
   for (let row = 0; row < 8; row++) {
     const rowPtr = row * 8;
+    const x0 = data[rowPtr + 0];
+    const x1 = data[rowPtr + 1];
+    const x2 = data[rowPtr + 2];
+    const x3 = data[rowPtr + 3];
+    const x4 = data[rowPtr + 4];
+    const x5 = data[rowPtr + 5];
+    const x6 = data[rowPtr + 6];
+    const x7 = data[rowPtr + 7];
 
-    alpha[0] = c * data[rowPtr + 2];
-    alpha[1] = f * data[rowPtr + 2];
-    alpha[2] = c * data[rowPtr + 6];
-    alpha[3] = f * data[rowPtr + 6];
+    const alpha0 = DCT_C * x2;
+    const alpha1 = DCT_F * x2;
+    const alpha2 = DCT_C * x6;
+    const alpha3 = DCT_F * x6;
 
-    beta[0] = b * data[rowPtr + 1] + d * data[rowPtr + 3] + e * data[rowPtr + 5] + g * data[rowPtr + 7];
-    beta[1] = d * data[rowPtr + 1] - g * data[rowPtr + 3] - b * data[rowPtr + 5] - e * data[rowPtr + 7];
-    beta[2] = e * data[rowPtr + 1] - b * data[rowPtr + 3] + g * data[rowPtr + 5] + d * data[rowPtr + 7];
-    beta[3] = g * data[rowPtr + 1] - e * data[rowPtr + 3] + d * data[rowPtr + 5] - b * data[rowPtr + 7];
+    const beta0 = DCT_B * x1 + DCT_D * x3 + DCT_E * x5 + DCT_G * x7;
+    const beta1 = DCT_D * x1 - DCT_G * x3 - DCT_B * x5 - DCT_E * x7;
+    const beta2 = DCT_E * x1 - DCT_B * x3 + DCT_G * x5 + DCT_D * x7;
+    const beta3 = DCT_G * x1 - DCT_E * x3 + DCT_D * x5 - DCT_B * x7;
 
-    theta[0] = a * (data[rowPtr + 0] + data[rowPtr + 4]);
-    theta[3] = a * (data[rowPtr + 0] - data[rowPtr + 4]);
-    theta[1] = alpha[0] + alpha[3];
-    theta[2] = alpha[1] - alpha[2];
+    const theta0 = DCT_A * (x0 + x4);
+    const theta1 = alpha0 + alpha3;
+    const theta2 = alpha1 - alpha2;
+    const theta3 = DCT_A * (x0 - x4);
 
-    gamma[0] = theta[0] + theta[1];
-    gamma[1] = theta[3] + theta[2];
-    gamma[2] = theta[3] - theta[2];
-    gamma[3] = theta[0] - theta[1];
+    const gamma0 = theta0 + theta1;
+    const gamma1 = theta3 + theta2;
+    const gamma2 = theta3 - theta2;
+    const gamma3 = theta0 - theta1;
 
-    data[rowPtr + 0] = gamma[0] + beta[0];
-    data[rowPtr + 1] = gamma[1] + beta[1];
-    data[rowPtr + 2] = gamma[2] + beta[2];
-    data[rowPtr + 3] = gamma[3] + beta[3];
-    data[rowPtr + 4] = gamma[3] - beta[3];
-    data[rowPtr + 5] = gamma[2] - beta[2];
-    data[rowPtr + 6] = gamma[1] - beta[1];
-    data[rowPtr + 7] = gamma[0] - beta[0];
+    data[rowPtr + 0] = gamma0 + beta0;
+    data[rowPtr + 1] = gamma1 + beta1;
+    data[rowPtr + 2] = gamma2 + beta2;
+    data[rowPtr + 3] = gamma3 + beta3;
+    data[rowPtr + 4] = gamma3 - beta3;
+    data[rowPtr + 5] = gamma2 - beta2;
+    data[rowPtr + 6] = gamma1 - beta1;
+    data[rowPtr + 7] = gamma0 - beta0;
   }
 
   for (let column = 0; column < 8; column++) {
-    alpha[0] = c * data[16 + column];
-    alpha[1] = f * data[16 + column];
-    alpha[2] = c * data[48 + column];
-    alpha[3] = f * data[48 + column];
+    const x0 = data[column];
+    const x1 = data[8 + column];
+    const x2 = data[16 + column];
+    const x3 = data[24 + column];
+    const x4 = data[32 + column];
+    const x5 = data[40 + column];
+    const x6 = data[48 + column];
+    const x7 = data[56 + column];
 
-    beta[0] = b * data[8 + column] + d * data[24 + column] + e * data[40 + column] + g * data[56 + column];
-    beta[1] = d * data[8 + column] - g * data[24 + column] - b * data[40 + column] - e * data[56 + column];
-    beta[2] = e * data[8 + column] - b * data[24 + column] + g * data[40 + column] + d * data[56 + column];
-    beta[3] = g * data[8 + column] - e * data[24 + column] + d * data[40 + column] - b * data[56 + column];
+    const alpha0 = DCT_C * x2;
+    const alpha1 = DCT_F * x2;
+    const alpha2 = DCT_C * x6;
+    const alpha3 = DCT_F * x6;
 
-    theta[0] = a * (data[column] + data[32 + column]);
-    theta[3] = a * (data[column] - data[32 + column]);
-    theta[1] = alpha[0] + alpha[3];
-    theta[2] = alpha[1] - alpha[2];
+    const beta0 = DCT_B * x1 + DCT_D * x3 + DCT_E * x5 + DCT_G * x7;
+    const beta1 = DCT_D * x1 - DCT_G * x3 - DCT_B * x5 - DCT_E * x7;
+    const beta2 = DCT_E * x1 - DCT_B * x3 + DCT_G * x5 + DCT_D * x7;
+    const beta3 = DCT_G * x1 - DCT_E * x3 + DCT_D * x5 - DCT_B * x7;
 
-    gamma[0] = theta[0] + theta[1];
-    gamma[1] = theta[3] + theta[2];
-    gamma[2] = theta[3] - theta[2];
-    gamma[3] = theta[0] - theta[1];
+    const theta0 = DCT_A * (x0 + x4);
+    const theta1 = alpha0 + alpha3;
+    const theta2 = alpha1 - alpha2;
+    const theta3 = DCT_A * (x0 - x4);
 
-    data[0 + column] = gamma[0] + beta[0];
-    data[8 + column] = gamma[1] + beta[1];
-    data[16 + column] = gamma[2] + beta[2];
-    data[24 + column] = gamma[3] + beta[3];
-    data[32 + column] = gamma[3] - beta[3];
-    data[40 + column] = gamma[2] - beta[2];
-    data[48 + column] = gamma[1] - beta[1];
-    data[56 + column] = gamma[0] - beta[0];
+    const gamma0 = theta0 + theta1;
+    const gamma1 = theta3 + theta2;
+    const gamma2 = theta3 - theta2;
+    const gamma3 = theta0 - theta1;
+
+    data[column] = gamma0 + beta0;
+    data[8 + column] = gamma1 + beta1;
+    data[16 + column] = gamma2 + beta2;
+    data[24 + column] = gamma3 + beta3;
+    data[32 + column] = gamma3 - beta3;
+    data[40 + column] = gamma2 - beta2;
+    data[48 + column] = gamma1 - beta1;
+    data[56 + column] = gamma0 - beta0;
   }
 }
 
@@ -737,11 +795,8 @@ function csc709Inverse(data: [Float32Array, Float32Array, Float32Array]) {
 function float32ToFloat16(value: number): number {
   if (Object.is(value, 0)) return 0;
 
-  const floatView = new Float32Array(1);
-  const intView = new Uint32Array(floatView.buffer);
-  floatView[0] = value;
-
-  const bits = intView[0];
+  FLOAT32_TO_FLOAT16_FLOAT_VIEW[0] = value;
+  const bits = FLOAT32_TO_FLOAT16_INT_VIEW[0];
   const sign = (bits >>> 16) & 0x8000;
   const exponent = ((bits >>> 23) & 0xff) - 127 + 15;
   const mantissa = bits & 0x7fffff;
@@ -760,10 +815,13 @@ function float32ToFloat16(value: number): number {
 }
 
 function toLinear(value: number): number {
-  if (value <= 1) {
-    return Math.sign(value) * Math.pow(Math.abs(value), 2.2);
+  const abs = Math.abs(value);
+  if (abs <= 1) {
+    const linear = Math.pow(abs, 2.2);
+    return value < 0 ? -linear : linear;
   }
-  return Math.sign(value) * Math.pow(LOG_BASE, Math.abs(value) - 1.0);
+  const linear = Math.pow(LOG_BASE, abs - 1.0);
+  return value < 0 ? -linear : linear;
 }
 
 function convertToHalf(src: Float32Array, dst: Uint16Array, idx: number) {
@@ -774,7 +832,7 @@ function convertToHalf(src: Float32Array, dst: Uint16Array, idx: number) {
 
 function lossyDctDecode(
   cscSet: DwaCscSet,
-  rowPtrs: number[][],
+  rowPtrs: Int32Array[],
   channelData: DwaChannelData[],
   acBuffer: Uint16Array,
   dcBuffer: Uint16Array,
@@ -790,7 +848,8 @@ function lossyDctDecode(
   }
 
   const cscIndices = [c0, c1, c2];
-  let dataView = new DataView(outBuffer.buffer, outBuffer.byteOffset, outBuffer.byteLength);
+  const dataView = new DataView(outBuffer.buffer, outBuffer.byteOffset, outBuffer.byteLength);
+  const outWords = new Uint16Array(outBuffer.buffer, outBuffer.byteOffset, outBuffer.byteLength >> 1);
 
   const width = channelData[c0].width;
   const height = channelData[c0].height;
@@ -807,7 +866,7 @@ function lossyDctDecode(
   const dctData = new Array<Float32Array>(numComp);
   const halfZigBlock = new Array<Uint16Array>(numComp);
   const rowBlock = new Array<Uint16Array>(numComp);
-  const rowOffsets = new Array<number[]>(numComp);
+  const rowOffsets = new Array<Int32Array>(numComp);
 
   for (let comp = 0; comp < numComp; comp++) {
     rowOffsets[comp] = rowPtrs[cscIndices[comp]];
@@ -851,39 +910,36 @@ function lossyDctDecode(
       const sampleWords = channelData[channelIndex].sampleWords;
 
       for (let y = 8 * blockY; y < 8 * blockY + maxY; y++) {
-        let offset = rowOffsets[comp][y];
+        let offsetWords = rowOffsets[comp][y] >> 1;
 
         for (let blockX = 0; blockX < numFullBlocksX; blockX++) {
           const src = blockX * 64 + ((y & 0x7) * 8);
 
-          dataView.setUint16(offset + 0 * INT16_SIZE * sampleWords, rowBlock[comp][src + 0], true);
-          dataView.setUint16(offset + 1 * INT16_SIZE * sampleWords, rowBlock[comp][src + 1], true);
-          dataView.setUint16(offset + 2 * INT16_SIZE * sampleWords, rowBlock[comp][src + 2], true);
-          dataView.setUint16(offset + 3 * INT16_SIZE * sampleWords, rowBlock[comp][src + 3], true);
-          dataView.setUint16(offset + 4 * INT16_SIZE * sampleWords, rowBlock[comp][src + 4], true);
-          dataView.setUint16(offset + 5 * INT16_SIZE * sampleWords, rowBlock[comp][src + 5], true);
-          dataView.setUint16(offset + 6 * INT16_SIZE * sampleWords, rowBlock[comp][src + 6], true);
-          dataView.setUint16(offset + 7 * INT16_SIZE * sampleWords, rowBlock[comp][src + 7], true);
+          outWords[offsetWords + 0 * sampleWords] = rowBlock[comp][src + 0];
+          outWords[offsetWords + 1 * sampleWords] = rowBlock[comp][src + 1];
+          outWords[offsetWords + 2 * sampleWords] = rowBlock[comp][src + 2];
+          outWords[offsetWords + 3 * sampleWords] = rowBlock[comp][src + 3];
+          outWords[offsetWords + 4 * sampleWords] = rowBlock[comp][src + 4];
+          outWords[offsetWords + 5 * sampleWords] = rowBlock[comp][src + 5];
+          outWords[offsetWords + 6 * sampleWords] = rowBlock[comp][src + 6];
+          outWords[offsetWords + 7 * sampleWords] = rowBlock[comp][src + 7];
 
-          offset += 8 * INT16_SIZE * sampleWords;
+          offsetWords += 8 * sampleWords;
         }
       }
 
       if (numFullBlocksX !== numBlocksX) {
         for (let y = 8 * blockY; y < 8 * blockY + maxY; y++) {
-          const offset = rowOffsets[comp][y] + 8 * numFullBlocksX * INT16_SIZE * sampleWords;
+          const offsetWords = (rowOffsets[comp][y] >> 1) + 8 * numFullBlocksX * sampleWords;
           const src = numFullBlocksX * 64 + ((y & 0x7) * 8);
 
           for (let x = 0; x < maxX; x++) {
-            dataView.setUint16(offset + x * INT16_SIZE * sampleWords, rowBlock[comp][src + x], true);
+            outWords[offsetWords + x * sampleWords] = rowBlock[comp][src + x];
           }
         }
       }
     }
   }
-
-  const halfRow = new Uint16Array(width);
-  dataView = new DataView(outBuffer.buffer, outBuffer.byteOffset, outBuffer.byteLength);
 
   for (let comp = 0; comp < numComp; comp++) {
     const channelIndex = cscIndices[comp];
@@ -896,12 +952,10 @@ function lossyDctDecode(
     const sampleWords = channel.sampleWords;
     for (let y = 0; y < height; y++) {
       const offset = rowOffsets[comp][y];
-
+      let srcWords = offset >> 1;
       for (let x = 0; x < width; x++) {
-        halfRow[x] = dataView.getUint16(offset + x * INT16_SIZE * sampleWords, true);
-      }
-      for (let x = 0; x < width; x++) {
-        dataView.setFloat32(offset + x * INT16_SIZE * sampleWords, float16ToFloat32(halfRow[x]), true);
+        dataView.setFloat32(offset + x * INT16_SIZE * sampleWords, float16ToFloat32(outWords[srcWords]), true);
+        srcWords += sampleWords;
       }
     }
   }
@@ -914,7 +968,7 @@ function lossyDctDecode(
 
 function lossyDctChannelDecode(
   channelIndex: number,
-  rowPtrs: number[][],
+  rowPtrs: Int32Array[],
   channelData: DwaChannelData[],
   acBuffer: Uint16Array,
   dcBuffer: Uint16Array,
@@ -923,6 +977,7 @@ function lossyDctChannelDecode(
   dcOffset: number,
 ): DecodeUsage {
   const dataView = new DataView(outBuffer.buffer, outBuffer.byteOffset, outBuffer.byteLength);
+  const outWords = new Uint16Array(outBuffer.buffer, outBuffer.byteOffset, outBuffer.byteLength >> 1);
   const channel = channelData[channelIndex];
   const width = channel.width;
   const height = channel.height;
@@ -958,36 +1013,33 @@ function lossyDctChannelDecode(
     }
 
     for (let y = 8 * blockY; y < 8 * blockY + maxY; y++) {
-      let offset = rowPtrs[channelIndex][y];
+      let offsetWords = rowPtrs[channelIndex][y] >> 1;
 
       for (let blockX = 0; blockX < numFullBlocksX; blockX++) {
         const src = blockX * 64 + ((y & 0x7) * 8);
 
         for (let x = 0; x < 8; x++) {
-          dataView.setUint16(offset + x * INT16_SIZE * channel.sampleWords, rowBlock[src + x], true);
+          outWords[offsetWords + x * channel.sampleWords] = rowBlock[src + x];
         }
-        offset += 8 * INT16_SIZE * channel.sampleWords;
+        offsetWords += 8 * channel.sampleWords;
       }
 
       if (numBlocksX !== numFullBlocksX) {
         const src = numFullBlocksX * 64 + ((y & 0x7) * 8);
         for (let x = 0; x < leftoverX; x++) {
-          dataView.setUint16(offset + x * INT16_SIZE * channel.sampleWords, rowBlock[src + x], true);
+          outWords[offsetWords + x * channel.sampleWords] = rowBlock[src + x];
         }
       }
     }
   }
 
   if (channel.pixelType === 2) {
-    const halfRow = new Uint16Array(width);
     for (let y = 0; y < height; y++) {
       const offset = rowPtrs[channelIndex][y];
-
+      let srcWords = offset >> 1;
       for (let x = 0; x < width; x++) {
-        halfRow[x] = dataView.getUint16(offset + x * INT16_SIZE * channel.sampleWords, true);
-      }
-      for (let x = 0; x < width; x++) {
-        dataView.setFloat32(offset + x * INT16_SIZE * channel.sampleWords, float16ToFloat32(halfRow[x]), true);
+        dataView.setFloat32(offset + x * INT16_SIZE * channel.sampleWords, float16ToFloat32(outWords[srcWords]), true);
+        srcWords += channel.sampleWords;
       }
     }
   }
@@ -1156,7 +1208,9 @@ function decodeDwaChunk(context: DwaDecodeContext): Uint8Array {
       }
       case DEFLATE: {
         const compressed = bytes.subarray(cursor.value, cursor.value + header.acCompressedSize);
-        const decoded = unzlibSync(compressed);
+        const decoded = unzlibSync(compressed, {
+          out: new Uint8Array(header.totalAcUncompressedCount * INT16_SIZE),
+        });
         if (decoded.byteLength % 2 !== 0) {
           throw new Error('Invalid DWA AC DEFLATE payload size.');
         }
@@ -1176,7 +1230,13 @@ function decodeDwaChunk(context: DwaDecodeContext): Uint8Array {
   }
 
   if (header.dcCompressedSize > 0) {
-    const dcBytes = uncompressZipStyle(bytes, cursor.value, header.dcCompressedSize);
+    const dcBytes = uncompressZipStyle(
+      bytes,
+      cursor.value,
+      header.dcCompressedSize,
+      header.totalDcUncompressedCount * INT16_SIZE,
+      DWA_DC_SCRATCH,
+    );
     if (dcBytes.byteLength % 2 !== 0) {
       throw new Error('Invalid DWA DC payload size.');
     }
@@ -1198,15 +1258,14 @@ function decodeDwaChunk(context: DwaDecodeContext): Uint8Array {
     }
 
     const compressed = bytes.subarray(cursor.value, cursor.value + header.rleCompressedSize);
-    const decoded = unzlibSync(compressed);
+    const decoded = unzlibSync(compressed, {
+      out: new Uint8Array(header.rleUncompressedSize),
+    });
     if (decoded.byteLength !== header.rleUncompressedSize) {
       throw new Error('Invalid DWA RLE intermediate payload length.');
     }
 
-    rleBuffer = decodeRunLength(decoded);
-    if (rleBuffer.byteLength !== header.rleRawSize) {
-      throw new Error('Invalid DWA RLE payload length.');
-    }
+    rleBuffer = decodeRunLength(decoded, header.rleRawSize);
 
     cursor.value += header.rleCompressedSize;
   } else if (header.rleCompressedSize !== 0 || header.rleUncompressedSize !== 0) {
@@ -1214,9 +1273,9 @@ function decodeDwaChunk(context: DwaDecodeContext): Uint8Array {
   }
 
   let outputSize = 0;
-  const rowOffsets: number[][] = new Array(channelData.length);
+  const rowOffsets: Int32Array[] = new Array(channelData.length);
   for (let i = 0; i < channelData.length; i++) {
-    rowOffsets[i] = new Array<number>(lines);
+    rowOffsets[i] = new Int32Array(lines);
   }
 
   for (let y = 0; y < lines; y++) {
