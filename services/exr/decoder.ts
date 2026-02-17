@@ -1,18 +1,24 @@
-import { decodeExrPart, ExrPart, ExrStructure } from '../../core/exr';
+import { decodeExrPart } from '../../core/exr';
+import type { ExrPart, ExrStructure } from '../../core/exr';
 import { RawDecodeResult } from '../render/types';
 import { DecodingOptions, LogEntry, LogStatus } from '../../types';
 import { mapExrErrorToLogEntry, mapExrEventToLogEntry } from './logAdapter';
 
 const ZIPS_COMPRESSION = 2;
 const ZIP_COMPRESSION = 3;
+const DWAA_COMPRESSION = 8;
+const DWAB_COMPRESSION = 9;
 const PARALLEL_ZIP_MIN_CHUNKS = 8;
+const PARALLEL_DWA_MIN_CHUNKS = 2;
 const MAX_PARALLEL_WORKERS = 8;
 
-interface ZipChunkTask {
+interface CompressedChunkTask {
   chunkIndex: number;
   dataPtr: number;
   dataSize: number;
   expectedUncompressedSize: number;
+  chunkY: number;
+  linesInChunk: number;
 }
 
 interface ZipWorkerRequest {
@@ -36,6 +42,41 @@ interface ZipWorkerFailure {
 type ZipWorkerResponse = ZipWorkerSuccess | ZipWorkerFailure;
 
 interface ParallelZipDecodeResult {
+  blocks: Map<number, Uint8Array>;
+  workers: number;
+  ms: number;
+}
+
+interface DwaWorkerInitMessage {
+  type: 'init';
+  part: ExrPart;
+  partId: number;
+}
+
+interface DwaWorkerDecodeMessage {
+  type: 'decode';
+  id: number;
+  compressed: ArrayBuffer;
+  chunkIndex: number;
+  chunkY: number;
+  linesInChunk: number;
+}
+
+interface DwaWorkerSuccess {
+  id: number;
+  ok: true;
+  decoded: ArrayBuffer;
+}
+
+interface DwaWorkerFailure {
+  id: number;
+  ok: false;
+  error: string;
+}
+
+type DwaWorkerResponse = DwaWorkerSuccess | DwaWorkerFailure;
+
+interface ParallelDwaDecodeResult {
   blocks: Map<number, Uint8Array>;
   workers: number;
   ms: number;
@@ -242,7 +283,7 @@ function getExpectedUncompressedChunkSize(
   return expected;
 }
 
-function canUseParallelZipDecode(): boolean {
+function canUseParallelChunkDecode(): boolean {
   return typeof window !== 'undefined' && typeof Worker !== 'undefined';
 }
 
@@ -256,15 +297,20 @@ function getParallelWorkerCount(taskCount: number): number {
   return Math.max(1, Math.min(taskCount, target, MAX_PARALLEL_WORKERS));
 }
 
-function collectZipChunkTasks(
+function collectCompressedChunkTasks(
   buffer: ArrayBuffer,
   structure: ExrStructure,
   part: ExrPart,
   partIndex: number,
-): ZipChunkTask[] {
+): CompressedChunkTask[] {
   if (!part.dataWindow) return [];
   const compression = part.compression ?? 0;
-  if (compression !== ZIPS_COMPRESSION && compression !== ZIP_COMPRESSION) {
+  if (
+    compression !== ZIPS_COMPRESSION &&
+    compression !== ZIP_COMPRESSION &&
+    compression !== DWAA_COMPRESSION &&
+    compression !== DWAB_COMPRESSION
+  ) {
     return [];
   }
 
@@ -294,7 +340,7 @@ function collectZipChunkTasks(
   }
 
   const channelMeta = buildZipChannelMeta(part);
-  const tasks: ZipChunkTask[] = [];
+  const tasks: CompressedChunkTask[] = [];
 
   for (let chunkIndex = 0; chunkIndex < chunkOffsets.length; chunkIndex++) {
     const chunkOffset = chunkOffsets[chunkIndex];
@@ -342,6 +388,8 @@ function collectZipChunkTasks(
         dataPtr,
         dataSize,
         expectedUncompressedSize,
+        chunkY,
+        linesInChunk,
       });
     }
   }
@@ -351,7 +399,7 @@ function collectZipChunkTasks(
 
 async function decodeZipTasksInWorkers(
   buffer: ArrayBuffer,
-  tasks: ZipChunkTask[],
+  tasks: CompressedChunkTask[],
 ): Promise<ParallelZipDecodeResult> {
   if (tasks.length === 0) {
     return {
@@ -364,7 +412,7 @@ async function decodeZipTasksInWorkers(
   const t0 = nowMs();
   const workerCount = getParallelWorkerCount(tasks.length);
   const workers: Worker[] = [];
-  const taskByMessageId = new Map<number, ZipChunkTask>();
+  const taskByMessageId = new Map<number, CompressedChunkTask>();
   const blocks = new Map<number, Uint8Array>();
 
   return new Promise((resolve, reject) => {
@@ -454,6 +502,122 @@ async function decodeZipTasksInWorkers(
   });
 }
 
+async function decodeDwaTasksInWorkers(
+  buffer: ArrayBuffer,
+  tasks: CompressedChunkTask[],
+  part: ExrPart,
+): Promise<ParallelDwaDecodeResult> {
+  if (tasks.length === 0) {
+    return {
+      blocks: new Map<number, Uint8Array>(),
+      workers: 0,
+      ms: 0,
+    };
+  }
+
+  const t0 = nowMs();
+  const workerCount = getParallelWorkerCount(tasks.length);
+  const workers: Worker[] = [];
+  const taskByMessageId = new Map<number, CompressedChunkTask>();
+  const blocks = new Map<number, Uint8Array>();
+
+  return new Promise((resolve, reject) => {
+    let completed = 0;
+    let nextTaskIndex = 0;
+    let nextMessageId = 1;
+    let settled = false;
+
+    const cleanup = () => {
+      for (const worker of workers) {
+        worker.terminate();
+      }
+    };
+
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+
+    const finishIfDone = () => {
+      if (settled || completed !== tasks.length) return;
+      settled = true;
+      cleanup();
+      resolve({
+        blocks,
+        workers: workerCount,
+        ms: nowMs() - t0,
+      });
+    };
+
+    const dispatchNextTask = (worker: Worker) => {
+      if (settled || nextTaskIndex >= tasks.length) {
+        return;
+      }
+
+      const task = tasks[nextTaskIndex++];
+      const messageId = nextMessageId++;
+      taskByMessageId.set(messageId, task);
+
+      const compressed = new Uint8Array(task.dataSize);
+      compressed.set(new Uint8Array(buffer, task.dataPtr, task.dataSize));
+
+      const request: DwaWorkerDecodeMessage = {
+        type: 'decode',
+        id: messageId,
+        compressed: compressed.buffer,
+        chunkIndex: task.chunkIndex,
+        chunkY: task.chunkY,
+        linesInChunk: task.linesInChunk,
+      };
+
+      worker.postMessage(request, [request.compressed]);
+    };
+
+    for (let i = 0; i < workerCount; i++) {
+      const worker = new Worker(new URL('./dwaDecodeWorker.ts', import.meta.url), {
+        type: 'module',
+      });
+      workers.push(worker);
+
+      const initMessage: DwaWorkerInitMessage = {
+        type: 'init',
+        part,
+        partId: part.id,
+      };
+      worker.postMessage(initMessage);
+
+      worker.onmessage = (event: MessageEvent<DwaWorkerResponse>) => {
+        if (settled) return;
+        const response = event.data;
+        const task = taskByMessageId.get(response.id);
+        if (!task) {
+          fail(new Error('Received worker response for unknown task.'));
+          return;
+        }
+        taskByMessageId.delete(response.id);
+
+        if (!response.ok) {
+          fail(new Error(response.error || 'DWA worker failed.'));
+          return;
+        }
+
+        blocks.set(task.chunkIndex, new Uint8Array(response.decoded));
+        completed += 1;
+        dispatchNextTask(worker);
+        finishIfDone();
+      };
+
+      worker.onerror = (event: ErrorEvent) => {
+        fail(event.error || new Error(event.message || 'DWA worker error.'));
+      };
+
+      dispatchNextTask(worker);
+    }
+  });
+}
+
 export class ExrDecoder {
   constructor(
     private readonly buffer: ArrayBuffer,
@@ -476,22 +640,22 @@ export class ExrDecoder {
       const tDecodeStart = nowMs();
       const compression = part.compression ?? 0;
       let predecodedZipBlocks: Map<number, Uint8Array> | undefined;
+      let predecodedDwaBlocks: Map<number, Uint8Array> | undefined;
       let workerMs = 0;
       let workerChunks = 0;
       let workerCount = 0;
+      let workerCodec = '';
 
-      if (
-        (compression === ZIPS_COMPRESSION || compression === ZIP_COMPRESSION) &&
-        canUseParallelZipDecode()
-      ) {
+      if ((compression === ZIPS_COMPRESSION || compression === ZIP_COMPRESSION) && canUseParallelChunkDecode()) {
         try {
-          const tasks = collectZipChunkTasks(this.buffer, this.structure, part, partIndex);
+          const tasks = collectCompressedChunkTasks(this.buffer, this.structure, part, partIndex);
           if (tasks.length >= PARALLEL_ZIP_MIN_CHUNKS) {
             const parallel = await decodeZipTasksInWorkers(this.buffer, tasks);
             predecodedZipBlocks = parallel.blocks;
             workerMs = parallel.ms;
             workerChunks = tasks.length;
             workerCount = parallel.workers;
+            workerCodec = 'ZIP';
 
             this.onLog({
               id: uid('decode-parallel'),
@@ -518,10 +682,47 @@ export class ExrDecoder {
         }
       }
 
+      if ((compression === DWAA_COMPRESSION || compression === DWAB_COMPRESSION) && canUseParallelChunkDecode()) {
+        try {
+          const tasks = collectCompressedChunkTasks(this.buffer, this.structure, part, partIndex);
+          if (tasks.length >= PARALLEL_DWA_MIN_CHUNKS) {
+            const parallel = await decodeDwaTasksInWorkers(this.buffer, tasks, part);
+            predecodedDwaBlocks = parallel.blocks;
+            workerMs = parallel.ms;
+            workerChunks = tasks.length;
+            workerCount = parallel.workers;
+            workerCodec = 'DWA';
+
+            this.onLog({
+              id: uid('decode-parallel'),
+              stepId: 'decode.parallel',
+              title: 'Parallel DWA Decode',
+              status: LogStatus.Ok,
+              ms: parallel.ms,
+              metrics: [
+                { label: 'Workers', value: parallel.workers },
+                { label: 'Chunks', value: tasks.length },
+              ],
+            });
+          }
+        } catch (error) {
+          this.onLog({
+            id: uid('decode-parallel'),
+            stepId: 'decode.parallel',
+            title: 'Parallel DWA Decode Fallback',
+            status: LogStatus.Warn,
+            ms: 0,
+            metrics: [],
+            description: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
       const tCoreStart = nowMs();
       const decoded = decodeExrPart(this.buffer, this.structure, {
         partId: options.partId,
         predecodedZipBlocks,
+        predecodedDwaBlocks,
         onEvent: (event) => this.onLog(mapExrEventToLogEntry(event)),
       });
       const coreDecodeMs = nowMs() - tCoreStart;
@@ -565,6 +766,7 @@ export class ExrDecoder {
           { label: 'Expand ms', value: Number(expansionMs.toFixed(3)) },
           { label: 'Workers', value: workerCount },
           { label: 'Parallel chunks', value: workerChunks },
+          { label: 'Worker codec', value: workerCodec || 'none' },
         ],
         description: 'Includes worker predecode, core decode, and channel expansion.',
       });

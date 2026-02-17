@@ -557,11 +557,13 @@ export function decodeExrPart(
     );
 
     const predecodedZipBlock = options.predecodedZipBlocks?.get(chunkIndex);
+    const predecodedDwaBlock = options.predecodedDwaBlocks?.get(chunkIndex);
+    const predecodedBlock = predecodedZipBlock ?? predecodedDwaBlock;
 
     // OpenEXR chunks may be stored raw when compression is ineffective.
     const blockData =
-      predecodedZipBlock
-        ? predecodedZipBlock
+      predecodedBlock
+        ? predecodedBlock
         : dataSize === expectedUncompressedSize
         ? new Uint8Array(buffer, dataPtr, dataSize)
         : compressionHandler.decodeBlock({
