@@ -11,6 +11,7 @@ import { decodePxr24Block } from './pxr24';
 import { DecodeExrPartOptions, DecodedChannel, DecodedPart, ExrChannel, ExrPart, ExrStructure } from './types';
 
 const UINT32_MAX = 4294967295.0;
+const INV_UINT32_MAX = 1 / UINT32_MAX;
 
 function nowMs(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -41,23 +42,22 @@ function getScanlineLinesPerBlock(compression: number): number {
   }
 }
 
-function undoPredictor(data: Uint8Array) {
-  for (let i = 1; i < data.length; i++) {
-    data[i] = (data[i - 1] + data[i] - 128) & 0xff;
-  }
-}
-
-function undoInterleave(data: Uint8Array): Uint8Array {
+function undoZipPredictorAndInterleave(data: Uint8Array): Uint8Array {
   const length = data.length;
-  const output = new Uint8Array(length);
-  const half = Math.floor((length + 1) / 2);
-  const first = data.subarray(0, half);
-  const second = data.subarray(half);
+  if (length === 0) return data;
 
-  for (let i = 0; i < half; i++) {
-    output[i * 2] = first[i];
-    if (i * 2 + 1 < length) {
-      output[i * 2 + 1] = second[i];
+  const output = new Uint8Array(length);
+  const half = (length + 1) >> 1;
+
+  let predicted = data[0];
+  output[0] = predicted;
+
+  for (let i = 1; i < length; i++) {
+    predicted = (predicted + data[i] - 128) & 0xff;
+    if (i < half) {
+      output[i << 1] = predicted;
+    } else {
+      output[((i - half) << 1) + 1] = predicted;
     }
   }
 
@@ -89,12 +89,18 @@ function isSampledCoordinate(value: number, firstSample: number, sampling: numbe
 }
 
 function toNumberOffset(low: number, high: number): number {
+  // Most files stay within 53-bit safe range and avoid BigInt overhead.
+  if (high <= 0x1fffff) {
+    return high * 4294967296 + low;
+  }
+
   const combined = BigInt(low) + (BigInt(high) << 32n);
   if (combined > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new ExrError('MALFORMED_OFFSET_TABLE', 'Chunk offset exceeds safe integer range.', {
       offset: combined.toString(),
     });
   }
+
   return Number(combined);
 }
 
@@ -120,9 +126,11 @@ interface CompressionHandler {
 function decodeZipStyleBlock(context: CompressionDecodeContext): Uint8Array {
   try {
     const compressed = new Uint8Array(context.buffer, context.dataPtr, context.dataSize);
-    const raw = unzlibSync(compressed);
-    undoPredictor(raw);
-    return undoInterleave(raw);
+    const raw =
+      context.expectedUncompressedSize > 0
+        ? unzlibSync(compressed, { out: new Uint8Array(context.expectedUncompressedSize) })
+        : unzlibSync(compressed);
+    return undoZipPredictorAndInterleave(raw);
   } catch (error) {
     throw new ExrError('DECOMPRESSION_FAILED', 'Failed to decompress ZIP/ZIPS chunk.', {
       partId: context.partId,
@@ -227,7 +235,10 @@ const SUPPORTED_COMPRESSION_HANDLERS = new Map<number, CompressionHandler>([
 
 interface ChannelDecodeMeta {
   channel: ExrChannel;
+  pixelType: number;
+  ySampling: number;
   bytesPerSample: number;
+  rowByteLength: number;
   sampledWidth: number;
   sampledHeight: number;
   sampleOriginX: number;
@@ -251,7 +262,10 @@ function buildChannelMeta(part: ExrPart): ChannelDecodeMeta[] {
 
     return {
       channel,
+      pixelType: channel.pixelType,
+      ySampling,
       bytesPerSample,
+      rowByteLength: sampledWidth * bytesPerSample,
       sampledWidth,
       sampledHeight,
       sampleOriginX,
@@ -265,17 +279,14 @@ function getExpectedUncompressedChunkSize(
   part: ExrPart,
   channelMeta: ChannelDecodeMeta[],
   chunkY: number,
-  linesPerBlock: number,
+  linesInChunk: number,
 ): number {
   if (!part.dataWindow) return 0;
 
   let expected = 0;
 
-  for (let dy = 0; dy < linesPerBlock; dy++) {
+  for (let dy = 0; dy < linesInChunk; dy++) {
     const y = chunkY + dy;
-    if (y > part.dataWindow.yMax) {
-      break;
-    }
     if (y < part.dataWindow.yMin) {
       continue;
     }
@@ -285,26 +296,67 @@ function getExpectedUncompressedChunkSize(
         continue;
       }
 
-      const ySampling = meta.channel.ySampling > 0 ? meta.channel.ySampling : 1;
-      if (!isSampledCoordinate(y, meta.sampleOriginY, ySampling)) {
+      if (!isSampledCoordinate(y, meta.sampleOriginY, meta.ySampling)) {
         continue;
       }
 
-      expected += meta.sampledWidth * meta.bytesPerSample;
+      expected += meta.rowByteLength;
     }
   }
 
   return expected;
 }
 
-function decodeValue(view: DataView, byteOffset: number, pixelType: number): number {
-  if (pixelType === 1) {
-    return float16ToFloat32(view.getUint16(byteOffset, true));
+function decodeRowIntoChannel(
+  meta: ChannelDecodeMeta,
+  blockData: Uint8Array,
+  blockView: DataView,
+  blockPointer: number,
+  rowOffset: number,
+) {
+  const destination = meta.data;
+  const sampleCount = meta.sampledWidth;
+  const sourceByteOffset = blockData.byteOffset + blockPointer;
+
+  if (meta.pixelType === 1) {
+    if ((sourceByteOffset & 1) === 0) {
+      const source = new Uint16Array(blockData.buffer, sourceByteOffset, sampleCount);
+      for (let i = 0; i < sampleCount; i++) {
+        destination[rowOffset + i] = float16ToFloat32(source[i]);
+      }
+      return;
+    }
+
+    for (let i = 0; i < sampleCount; i++) {
+      destination[rowOffset + i] = float16ToFloat32(blockView.getUint16(blockPointer + (i << 1), true));
+    }
+    return;
   }
-  if (pixelType === 2) {
-    return view.getFloat32(byteOffset, true);
+
+  if (meta.pixelType === 2) {
+    if ((sourceByteOffset & 3) === 0) {
+      const source = new Float32Array(blockData.buffer, sourceByteOffset, sampleCount);
+      destination.set(source, rowOffset);
+      return;
+    }
+
+    for (let i = 0; i < sampleCount; i++) {
+      destination[rowOffset + i] = blockView.getFloat32(blockPointer + (i << 2), true);
+    }
+    return;
   }
-  return view.getUint32(byteOffset, true) / UINT32_MAX;
+
+  if ((sourceByteOffset & 3) === 0) {
+    const source = new Uint32Array(blockData.buffer, sourceByteOffset, sampleCount);
+    for (let i = 0; i < sampleCount; i++) {
+      destination[rowOffset + i] = source[i] * INV_UINT32_MAX;
+    }
+    return;
+  }
+
+  for (let i = 0; i < sampleCount; i++) {
+    destination[rowOffset + i] = blockView.getUint32(blockPointer + (i << 2), true) * INV_UINT32_MAX;
+  }
 }
 
 export function decodeExrPart(
@@ -471,7 +523,7 @@ export function decodeExrPart(
       part,
       channelMeta,
       chunkY,
-      linesPerBlock,
+      linesInChunk,
     );
 
     // OpenEXR chunks may be stored raw when compression is ineffective.
@@ -493,12 +545,10 @@ export function decodeExrPart(
     bytesRead += dataSize;
 
     let blockPointer = 0;
+    const blockView = new DataView(blockData.buffer, blockData.byteOffset, blockData.byteLength);
 
-    for (let dy = 0; dy < linesPerBlock; dy++) {
+    for (let dy = 0; dy < linesInChunk; dy++) {
       const y = chunkY + dy;
-      if (y > part.dataWindow.yMax) {
-        break;
-      }
       if (y < part.dataWindow.yMin) {
         continue;
       }
@@ -508,12 +558,11 @@ export function decodeExrPart(
           continue;
         }
 
-        const ySampling = meta.channel.ySampling > 0 ? meta.channel.ySampling : 1;
-        if (!isSampledCoordinate(y, meta.sampleOriginY, ySampling)) {
+        if (!isSampledCoordinate(y, meta.sampleOriginY, meta.ySampling)) {
           continue;
         }
 
-        const byteLength = meta.sampledWidth * meta.bytesPerSample;
+        const byteLength = meta.rowByteLength;
         if (blockPointer + byteLength > blockData.byteLength) {
           throw new ExrError('MALFORMED_CHUNK', 'Chunk row data exceeded block payload bounds.', {
             partId: part.id,
@@ -526,19 +575,14 @@ export function decodeExrPart(
           });
         }
 
-        const sampledRow = Math.floor((y - meta.sampleOriginY) / ySampling);
+        const sampledRow = Math.floor((y - meta.sampleOriginY) / meta.ySampling);
         if (sampledRow < 0 || sampledRow >= meta.sampledHeight) {
           blockPointer += byteLength;
           continue;
         }
 
         const rowOffset = sampledRow * meta.sampledWidth;
-        const rowView = new DataView(blockData.buffer, blockData.byteOffset + blockPointer, byteLength);
-
-        for (let sx = 0; sx < meta.sampledWidth; sx++) {
-          const sourceOffset = sx * meta.bytesPerSample;
-          meta.data[rowOffset + sx] = decodeValue(rowView, sourceOffset, meta.channel.pixelType);
-        }
+        decodeRowIntoChannel(meta, blockData, blockView, blockPointer, rowOffset);
 
         blockPointer += byteLength;
       }
