@@ -42,23 +42,23 @@ function getScanlineLinesPerBlock(compression: number): number {
   }
 }
 
-function undoZipPredictorAndInterleave(data: Uint8Array): Uint8Array {
+function undoZipPredictorAndInterleave(data: Uint8Array, output: Uint8Array): Uint8Array {
   const length = data.length;
   if (length === 0) return data;
 
-  const output = new Uint8Array(length);
   const half = (length + 1) >> 1;
 
   let predicted = data[0];
   output[0] = predicted;
 
-  for (let i = 1; i < length; i++) {
+  for (let i = 1; i < half; i++) {
     predicted = (predicted + data[i] - 128) & 0xff;
-    if (i < half) {
-      output[i << 1] = predicted;
-    } else {
-      output[((i - half) << 1) + 1] = predicted;
-    }
+    output[i << 1] = predicted;
+  }
+
+  for (let i = half; i < length; i++) {
+    predicted = (predicted + data[i] - 128) & 0xff;
+    output[((i - half) << 1) + 1] = predicted;
   }
 
   return output;
@@ -114,6 +114,7 @@ interface CompressionDecodeContext {
   chunkIndex: number;
   chunkY: number;
   linesInChunk: number;
+  zipScratch?: ZipDecodeScratch;
 }
 
 interface CompressionHandler {
@@ -123,14 +124,39 @@ interface CompressionHandler {
   decodeBlock: (context: CompressionDecodeContext) => Uint8Array;
 }
 
+interface ZipDecodeScratch {
+  inflate: Uint8Array;
+  output: Uint8Array;
+}
+
 function decodeZipStyleBlock(context: CompressionDecodeContext): Uint8Array {
   try {
     const compressed = new Uint8Array(context.buffer, context.dataPtr, context.dataSize);
-    const raw =
-      context.expectedUncompressedSize > 0
-        ? unzlibSync(compressed, { out: new Uint8Array(context.expectedUncompressedSize) })
-        : unzlibSync(compressed);
-    return undoZipPredictorAndInterleave(raw);
+    let raw: Uint8Array;
+
+    if (context.expectedUncompressedSize > 0 && context.zipScratch) {
+      if (context.zipScratch.inflate.byteLength < context.expectedUncompressedSize) {
+        context.zipScratch.inflate = new Uint8Array(context.expectedUncompressedSize);
+      }
+
+      const inflateOut = context.zipScratch.inflate.subarray(0, context.expectedUncompressedSize);
+      raw = unzlibSync(compressed, { out: inflateOut });
+    } else if (context.expectedUncompressedSize > 0) {
+      raw = unzlibSync(compressed, { out: new Uint8Array(context.expectedUncompressedSize) });
+    } else {
+      raw = unzlibSync(compressed);
+    }
+
+    if (context.zipScratch) {
+      if (context.zipScratch.output.byteLength < raw.byteLength) {
+        context.zipScratch.output = new Uint8Array(raw.byteLength);
+      }
+
+      const output = context.zipScratch.output.subarray(0, raw.byteLength);
+      return undoZipPredictorAndInterleave(raw, output);
+    }
+
+    return undoZipPredictorAndInterleave(raw, new Uint8Array(raw.byteLength));
   } catch (error) {
     throw new ExrError('DECOMPRESSION_FAILED', 'Failed to decompress ZIP/ZIPS chunk.', {
       partId: context.partId,
@@ -310,9 +336,9 @@ function getExpectedUncompressedChunkSize(
 function decodeRowIntoChannel(
   meta: ChannelDecodeMeta,
   blockData: Uint8Array,
-  blockView: DataView,
   blockPointer: number,
   rowOffset: number,
+  blockView: DataView,
 ) {
   const destination = meta.data;
   const sampleCount = meta.sampledWidth;
@@ -461,6 +487,10 @@ export function decodeExrPart(
   });
 
   const channelMeta = buildChannelMeta(part);
+  const zipScratch: ZipDecodeScratch = {
+    inflate: new Uint8Array(0),
+    output: new Uint8Array(0),
+  };
 
   const tDecode = nowMs();
   let bytesRead = 0;
@@ -526,9 +556,13 @@ export function decodeExrPart(
       linesInChunk,
     );
 
+    const predecodedZipBlock = options.predecodedZipBlocks?.get(chunkIndex);
+
     // OpenEXR chunks may be stored raw when compression is ineffective.
     const blockData =
-      dataSize === expectedUncompressedSize
+      predecodedZipBlock
+        ? predecodedZipBlock
+        : dataSize === expectedUncompressedSize
         ? new Uint8Array(buffer, dataPtr, dataSize)
         : compressionHandler.decodeBlock({
             buffer,
@@ -540,6 +574,7 @@ export function decodeExrPart(
             chunkIndex,
             chunkY,
             linesInChunk,
+            zipScratch: compression === 2 || compression === 3 ? zipScratch : undefined,
           });
 
     bytesRead += dataSize;
@@ -582,7 +617,7 @@ export function decodeExrPart(
         }
 
         const rowOffset = sampledRow * meta.sampledWidth;
-        decodeRowIntoChannel(meta, blockData, blockView, blockPointer, rowOffset);
+        decodeRowIntoChannel(meta, blockData, blockPointer, rowOffset, blockView);
 
         blockPointer += byteLength;
       }

@@ -40,6 +40,7 @@ export interface ParseExrOptions extends EventCapableOptions {}
 
 export interface DecodeExrPartOptions extends EventCapableOptions {
   partId: number;
+  predecodedZipBlocks?: Map<number, Uint8Array>;
 }
 
 export interface DecodedChannel {
