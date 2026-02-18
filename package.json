@@ -1,7 +1,7 @@
 {
-  "name": "exr-lab-v0.0.5",
+  "name": "exr-lab",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.6",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -109,13 +109,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectChannel,
   onOpenFile
 }) => {
+  const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0';
+
   return (
     <div className="h-full flex flex-col w-full bg-neutral-900">
       <div className="p-3 border-b border-neutral-800 shrink-0 flex items-center justify-between">
         <h1 className="text-sm font-bold flex items-center text-neutral-100">
           <FileImage className="w-5 h-5 mr-2 text-teal-500" />
           EXR Lab
-          <span className="ml-2 text-[10px] bg-neutral-800 text-neutral-400 px-1.5 py-0 rounded">v0.0.5</span>
+          <span className="ml-2 text-[10px] bg-neutral-800 text-neutral-400 px-1.5 py-0 rounded">v{appVersion}</span>
           <a
             href="https://github.com/promto-c/exr-lab"
             target="_blank"
