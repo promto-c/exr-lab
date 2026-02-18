@@ -137,3 +137,24 @@
 .tone-slider:focus-visible {
   box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.25);
 }
+
+.window-bbox {
+  position: absolute;
+  pointer-events: none;
+  box-sizing: border-box;
+  border-width: 0.15rem;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.window-bbox--display {
+  z-index: 13;
+  border-style: solid;
+  border-color: rgba(45, 212, 191, 0.2);
+}
+
+.window-bbox--data {
+  z-index: 14;
+  border-style: dashed;
+  border-color: rgba(250, 204, 21, 0.4);
+}

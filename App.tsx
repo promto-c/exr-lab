@@ -96,6 +96,7 @@ type PrecisionSliderStyle = React.CSSProperties & {
 };
 
 type ViewMode = 'rgb' | 'alpha';
+type WindowRect = { x: number; y: number; width: number; height: number };
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 
@@ -359,6 +360,76 @@ export default function App() {
   }, []);
 
   const canInteractWithViewport = Boolean(structure && rawPixelData);
+  const selectedPart = React.useMemo(() => {
+    if (!structure || selectedPartId === null) return null;
+    return structure.parts.find((part) => part.id === selectedPartId) || null;
+  }, [structure, selectedPartId]);
+
+  const dataWindowRect = React.useMemo<WindowRect | null>(() => {
+    if (!rawPixelData || !selectedPart?.dataWindow) return null;
+
+    const dataWindow = selectedPart.dataWindow;
+    const expectedWidth = dataWindow.xMax - dataWindow.xMin + 1;
+    const expectedHeight = dataWindow.yMax - dataWindow.yMin + 1;
+    if (expectedWidth !== rawPixelData.width || expectedHeight !== rawPixelData.height) return null;
+
+    const displayRefWindow = selectedPart.displayWindow ?? dataWindow;
+
+    return {
+      x: dataWindow.xMin - displayRefWindow.xMin,
+      y: dataWindow.yMin - displayRefWindow.yMin,
+      width: rawPixelData.width,
+      height: rawPixelData.height,
+    };
+  }, [rawPixelData, selectedPart]);
+
+  const displayWindowRect = React.useMemo<WindowRect | null>(() => {
+    if (!selectedPart?.dataWindow) return null;
+
+    const displayWindow = selectedPart.displayWindow ?? selectedPart.dataWindow;
+
+    return {
+      x: 0,
+      y: 0,
+      width: displayWindow.xMax - displayWindow.xMin + 1,
+      height: displayWindow.yMax - displayWindow.yMin + 1,
+    };
+  }, [selectedPart]);
+
+  const viewportReferenceRect = React.useMemo<WindowRect | null>(() => (
+    displayWindowRect ?? dataWindowRect
+  ), [displayWindowRect, dataWindowRect]);
+
+  const toScreenWindowRectStyle = React.useCallback((rect: WindowRect): React.CSSProperties => {
+    const { x, y, scale } = viewTransform;
+    return {
+      left: x + rect.x * scale,
+      top: y + rect.y * scale,
+      width: rect.width * scale,
+      height: rect.height * scale,
+    };
+  }, [viewTransform]);
+
+  const dataWindowScreenStyle = React.useMemo<React.CSSProperties | null>(() => {
+    if (!dataWindowRect) return null;
+    return toScreenWindowRectStyle(dataWindowRect);
+  }, [dataWindowRect, toScreenWindowRectStyle]);
+
+  const displayWindowScreenStyle = React.useMemo<React.CSSProperties | null>(() => {
+    if (!displayWindowRect) return null;
+    return toScreenWindowRectStyle(displayWindowRect);
+  }, [displayWindowRect, toScreenWindowRectStyle]);
+
+  const areDataAndDisplayWindowsEqual = React.useMemo(() => {
+    if (!dataWindowRect || !displayWindowRect) return false;
+    return (
+      dataWindowRect.x === displayWindowRect.x &&
+      dataWindowRect.y === displayWindowRect.y &&
+      dataWindowRect.width === displayWindowRect.width &&
+      dataWindowRect.height === displayWindowRect.height
+    );
+  }, [dataWindowRect, displayWindowRect]);
+
   const displayMapping = React.useMemo<ChannelMapping>(() => {
     if (viewMode === 'alpha' && channelMapping.a) {
       return {
@@ -548,9 +619,9 @@ export default function App() {
   }, [handleLog, rendererPreference, structure, switchToCpuFallback]);
 
   const fitView = React.useCallback(() => {
-    if (!rawPixelData || !containerRef.current) return;
-    
-    const { width, height } = rawPixelData;
+    if (!viewportReferenceRect || !containerRef.current) return;
+
+    const { x: targetX, y: targetY, width, height } = viewportReferenceRect;
     const { clientWidth, clientHeight } = containerRef.current;
     
     const padding = isMobile ? 20 : 60;
@@ -560,11 +631,11 @@ export default function App() {
     const scale = Math.min(availW / width, availH / height);
     const finalScale = scale > 0 ? scale : 1; 
 
-    const x = (clientWidth - width * finalScale) / 2;
-    const y = (clientHeight - height * finalScale) / 2;
+    const x = (clientWidth - width * finalScale) / 2 - targetX * finalScale;
+    const y = (clientHeight - height * finalScale) / 2 - targetY * finalScale;
 
     setViewTransform({ x, y, scale: finalScale });
-  }, [rawPixelData, isMobile]);
+  }, [isMobile, viewportReferenceRect]);
 
   const toggleExposure = () => {
     const isDefault = Math.abs(exposure) < 0.01;
@@ -841,14 +912,16 @@ export default function App() {
       }
 
       // Inspect
-      if (isInspectMode && rawPixelData && containerRef.current) {
+      if (isInspectMode && rawPixelData && containerRef.current && dataWindowRect) {
           const rect = containerRef.current.getBoundingClientRect();
           const mx = e.clientX - rect.left;
           const my = e.clientY - rect.top;
           
-          // Image Space
-          const ix = Math.floor((mx - viewTransform.x) / viewTransform.scale);
-          const iy = Math.floor((my - viewTransform.y) / viewTransform.scale);
+          // Display-window-referenced scene space -> data-window pixel index.
+          const sceneX = (mx - viewTransform.x) / viewTransform.scale;
+          const sceneY = (my - viewTransform.y) / viewTransform.scale;
+          const ix = Math.floor(sceneX - dataWindowRect.x);
+          const iy = Math.floor(sceneY - dataWindowRect.y);
           
           if (ix >= 0 && ix < rawPixelData.width && iy >= 0 && iy < rawPixelData.height) {
               setInspectCursor({ x: ix, y: iy });
@@ -994,8 +1067,12 @@ export default function App() {
           return rawPixelData.channels[name][idx];
       };
 
+      const fileX = selectedPart?.dataWindow ? selectedPart.dataWindow.xMin + x : x;
+      const fileY = selectedPart?.dataWindow ? selectedPart.dataWindow.yMin + y : y;
+
       return {
-          x, y,
+          x: fileX,
+          y: fileY,
           r: getValue(displayMapping.r),
           g: getValue(displayMapping.g),
           b: getValue(displayMapping.b),
@@ -1301,22 +1378,49 @@ export default function App() {
                   <DropZone onFileLoaded={handleFileLoaded} className="w-full max-w-md" />
               </div>
           ) : (
-              <div 
-                  className="absolute top-0 left-0 origin-top-left shadow-2xl transition-transform duration-75 ease-out"
-                  style={{ 
-                      transform: `translate(${viewTransform.x}px, ${viewTransform.y}px) scale(${viewTransform.scale})`,
-                      imageRendering: viewTransform.scale > 2 ? 'pixelated' : 'auto'
-                  }}
-              >
-                  {/* The canvas size matches the image data window size exactly */}
-                  <canvas ref={canvasRef} className="block pointer-events-none" />
-                  
-                  {selectedPartId === null && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-neutral-400 text-center px-4">
-                          Select a part to decode
-                      </div>
+              <>
+                  <div 
+                      className="absolute top-0 left-0 origin-top-left shadow-2xl"
+                      style={{ 
+                          transform: `translate(${viewTransform.x}px, ${viewTransform.y}px) scale(${viewTransform.scale})`,
+                          imageRendering: viewTransform.scale > 2 ? 'pixelated' : 'auto',
+                          width: viewportReferenceRect?.width ?? rawPixelData?.width,
+                          height: viewportReferenceRect?.height ?? rawPixelData?.height,
+                      }}
+                  >
+                      {/* The canvas is positioned in display-window space but sized to data-window pixels. */}
+                      <canvas
+                        ref={canvasRef}
+                        className="absolute block pointer-events-none"
+                        style={{
+                          left: dataWindowRect?.x ?? 0,
+                          top: dataWindowRect?.y ?? 0,
+                        }}
+                      />
+                      
+                      {selectedPartId === null && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-neutral-400 text-center px-4">
+                              Select a part to decode
+                          </div>
+                      )}
+                  </div>
+
+                  {!areDataAndDisplayWindowsEqual && displayWindowScreenStyle && (
+                      <div
+                          className="window-bbox window-bbox--display"
+                          style={displayWindowScreenStyle}
+                          aria-hidden="true"
+                      />
                   )}
-              </div>
+
+                  {!areDataAndDisplayWindowsEqual && dataWindowScreenStyle && (
+                      <div
+                          className="window-bbox window-bbox--data"
+                          style={dataWindowScreenStyle}
+                          aria-hidden="true"
+                      />
+                  )}
+              </>
           )}
           
           {/* Loading Overlay */}
@@ -1356,6 +1460,7 @@ export default function App() {
                               <li><strong>Scroll</strong> to zoom in/out.</li>
                               <li><strong>Left/Middle Drag</strong> to pan image.</li>
                               <li><strong>Touch</strong>: Pinch to zoom, drag to pan.</li>
+                              <li><strong>Dashed box</strong> is dataWindow; solid box is displayWindow (hidden when they match).</li>
                               <li><strong>A</strong> toggles RGB and Alpha view.</li>
                               <li>Use <strong>Inspector</strong> tool for pixel values.</li>
                               <li>Click <strong>Sun/Monitor</strong> icons to toggle defaults.</li>
