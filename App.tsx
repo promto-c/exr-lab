@@ -95,7 +95,15 @@ type PrecisionSliderStyle = React.CSSProperties & {
   '--precision-scale': string;
 };
 
+type ViewMode = 'rgb' | 'alpha';
+
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
+
+const isTextInputLikeTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]'));
+};
 
 const getStepPrecision = (step: number): number => {
   const text = String(step).toLowerCase();
@@ -285,6 +293,7 @@ export default function App() {
 
   // Channel Mapping State
   const [channelMapping, setChannelMapping] = React.useState<ChannelMapping>({ r: '', g: '', b: '', a: '' });
+  const [viewMode, setViewMode] = React.useState<ViewMode>('rgb');
 
   // View Settings
   const [exposure, setExposure] = React.useState(0);
@@ -333,6 +342,7 @@ export default function App() {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const rendererRef = React.useRef<Renderer | null>(null);
   const decodeEpochRef = React.useRef(0);
+  const shouldAutoFitRef = React.useRef(true);
 
   // Resize Listener
   React.useEffect(() => {
@@ -349,6 +359,24 @@ export default function App() {
   }, []);
 
   const canInteractWithViewport = Boolean(structure && rawPixelData);
+  const displayMapping = React.useMemo<ChannelMapping>(() => {
+    if (viewMode === 'alpha' && channelMapping.a) {
+      return {
+        r: channelMapping.a,
+        g: channelMapping.a,
+        b: channelMapping.a,
+        a: '',
+      };
+    }
+
+    return {
+      r: channelMapping.r,
+      g: channelMapping.g,
+      b: channelMapping.b,
+      a: '',
+    };
+  }, [channelMapping, viewMode]);
+
   const isViewportUiTarget = React.useCallback((target: EventTarget | null) => {
     const element =
       target instanceof Element
@@ -361,6 +389,27 @@ export default function App() {
       element.closest('button, input, select, textarea, a, label, [role="button"], [data-touch-ui="true"]')
     );
   }, []);
+
+  React.useEffect(() => {
+    if (viewMode === 'alpha' && !channelMapping.a) {
+      setViewMode('rgb');
+    }
+  }, [channelMapping.a, viewMode]);
+
+  React.useEffect(() => {
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat) return;
+      if (event.key.toLowerCase() !== 'a') return;
+      if (!rawPixelData || !channelMapping.a) return;
+      if (isTextInputLikeTarget(event.target)) return;
+
+      event.preventDefault();
+      setViewMode(prev => (prev === 'rgb' ? 'alpha' : 'rgb'));
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [channelMapping.a, rawPixelData]);
 
   // Prevent native page gestures while interacting with the loaded viewport
   React.useEffect(() => {
@@ -543,6 +592,7 @@ export default function App() {
 
   const handleFileLoaded = async (name: string, buffer: ArrayBuffer) => {
     decodeEpochRef.current += 1;
+    shouldAutoFitRef.current = true;
     setFileName(name);
     setFileBuffer(buffer);
     setLogs([]); 
@@ -550,6 +600,7 @@ export default function App() {
     setSelectedPartId(null);
     setHistogramData(null); 
     setRawPixelData(null);
+    setViewMode('rgb');
     setInspectCursor(null);
     setIsProcessing(true);
     
@@ -688,7 +739,7 @@ export default function App() {
       try {
           const result = rendererRef.current.render({
             raw: rawPixelData,
-            mapping: channelMapping,
+            mapping: displayMapping,
             params: { exposure, gamma }
           });
 
@@ -711,13 +762,13 @@ export default function App() {
           }
       }
 
-  }, [rawPixelData, exposure, gamma, channelMapping, rendererEpoch, handleLog, switchToCpuFallback]);
+  }, [rawPixelData, exposure, gamma, displayMapping, rendererEpoch, handleLog, switchToCpuFallback]);
 
-  // 3. Reset view when new data arrives
+  // 3. Auto-fit once per file load; preserve zoom/pan for subsequent updates
   React.useEffect(() => {
-      if (rawPixelData) {
-          fitView();
-      }
+      if (!rawPixelData || !shouldAutoFitRef.current) return;
+      fitView();
+      shouldAutoFitRef.current = false;
   }, [rawPixelData, fitView]);
 
   // --- Sidebar Handlers ---
@@ -945,9 +996,9 @@ export default function App() {
 
       return {
           x, y,
-          r: getValue(channelMapping.r),
-          g: getValue(channelMapping.g),
-          b: getValue(channelMapping.b),
+          r: getValue(displayMapping.r),
+          g: getValue(displayMapping.g),
+          b: getValue(displayMapping.b),
           a: getValue(channelMapping.a),
       };
   };
@@ -1114,13 +1165,16 @@ export default function App() {
                 {structure && !isMobile && (
                   <div className="hidden lg:flex items-center space-x-1">
                      <div className="px-1.5 py-0.5 bg-black/40 border border-red-900/50 rounded text-[10px] text-red-400 font-mono">
-                        R:{channelMapping.r || '-'}
+                        R:{displayMapping.r || '-'}
                      </div>
                      <div className="px-1.5 py-0.5 bg-black/40 border border-green-900/50 rounded text-[10px] text-green-400 font-mono">
-                        G:{channelMapping.g || '-'}
+                        G:{displayMapping.g || '-'}
                      </div>
                      <div className="px-1.5 py-0.5 bg-black/40 border border-blue-900/50 rounded text-[10px] text-blue-400 font-mono">
-                        B:{channelMapping.b || '-'}
+                        B:{displayMapping.b || '-'}
+                     </div>
+                     <div className="px-1.5 py-0.5 bg-black/40 border border-neutral-700 rounded text-[10px] text-neutral-300 font-mono">
+                        View:{viewMode === 'alpha' ? 'A' : 'RGB'}
                      </div>
                   </div>
                 )}
@@ -1302,6 +1356,7 @@ export default function App() {
                               <li><strong>Scroll</strong> to zoom in/out.</li>
                               <li><strong>Left/Middle Drag</strong> to pan image.</li>
                               <li><strong>Touch</strong>: Pinch to zoom, drag to pan.</li>
+                              <li><strong>A</strong> toggles RGB and Alpha view.</li>
                               <li>Use <strong>Inspector</strong> tool for pixel values.</li>
                               <li>Click <strong>Sun/Monitor</strong> icons to toggle defaults.</li>
                           </ul>
