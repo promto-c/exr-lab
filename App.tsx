@@ -365,23 +365,34 @@ export default function App() {
     return structure.parts.find((part) => part.id === selectedPartId) || null;
   }, [structure, selectedPartId]);
 
-  const dataWindowRect = React.useMemo<WindowRect | null>(() => {
-    if (!rawPixelData || !selectedPart?.dataWindow) return null;
+  const selectedPartDataWindowRect = React.useMemo<WindowRect | null>(() => {
+    if (!selectedPart?.dataWindow) return null;
 
     const dataWindow = selectedPart.dataWindow;
-    const expectedWidth = dataWindow.xMax - dataWindow.xMin + 1;
-    const expectedHeight = dataWindow.yMax - dataWindow.yMin + 1;
-    if (expectedWidth !== rawPixelData.width || expectedHeight !== rawPixelData.height) return null;
-
     const displayRefWindow = selectedPart.displayWindow ?? dataWindow;
 
     return {
       x: dataWindow.xMin - displayRefWindow.xMin,
       y: dataWindow.yMin - displayRefWindow.yMin,
+      width: dataWindow.xMax - dataWindow.xMin + 1,
+      height: dataWindow.yMax - dataWindow.yMin + 1,
+    };
+  }, [selectedPart]);
+
+  const dataWindowRect = React.useMemo<WindowRect | null>(() => {
+    if (!rawPixelData || !selectedPartDataWindowRect) return null;
+    if (
+      selectedPartDataWindowRect.width !== rawPixelData.width ||
+      selectedPartDataWindowRect.height !== rawPixelData.height
+    ) return null;
+
+    return {
+      x: selectedPartDataWindowRect.x,
+      y: selectedPartDataWindowRect.y,
       width: rawPixelData.width,
       height: rawPixelData.height,
     };
-  }, [rawPixelData, selectedPart]);
+  }, [rawPixelData, selectedPartDataWindowRect]);
 
   const displayWindowRect = React.useMemo<WindowRect | null>(() => {
     if (!selectedPart?.dataWindow) return null;
@@ -751,7 +762,13 @@ export default function App() {
   };
 
   const handleSelectPart = (partId: number) => {
-    setSelectedPartId(partId);
+    if (selectedPartId !== partId) {
+      const cachedRaw = partCacheRef.current.get(partId) ?? null;
+      setRawPixelData(cachedRaw);
+      setHistogramData(null);
+      setInspectCursor(null);
+      setSelectedPartId(partId);
+    }
     if (structure) {
         // Automatically guess default channels when switching parts explicitly
         const part = structure.parts.find(p => p.id === partId);
@@ -845,7 +862,13 @@ export default function App() {
   // --- Sidebar Handlers ---
 
   const handleSelectLayer = (partId: number, layerPrefix: string) => {
-      if (selectedPartId !== partId) setSelectedPartId(partId);
+      if (selectedPartId !== partId) {
+          const cachedRaw = partCacheRef.current.get(partId) ?? null;
+          setRawPixelData(cachedRaw);
+          setHistogramData(null);
+          setInspectCursor(null);
+          setSelectedPartId(partId);
+      }
       if (!structure) return;
       
       const part = structure.parts.find(p => p.id === partId);
@@ -857,7 +880,13 @@ export default function App() {
   };
 
   const handleSelectChannel = (partId: number, channelName: string) => {
-      if (selectedPartId !== partId) setSelectedPartId(partId);
+      if (selectedPartId !== partId) {
+          const cachedRaw = partCacheRef.current.get(partId) ?? null;
+          setRawPixelData(cachedRaw);
+          setHistogramData(null);
+          setInspectCursor(null);
+          setSelectedPartId(partId);
+      }
       // Map R, G, B to the same channel for grayscale visualization
       setChannelMapping({
           r: channelName,
@@ -1393,8 +1422,9 @@ export default function App() {
                         ref={canvasRef}
                         className="absolute block pointer-events-none"
                         style={{
-                          left: dataWindowRect?.x ?? 0,
-                          top: dataWindowRect?.y ?? 0,
+                          left: (dataWindowRect ?? selectedPartDataWindowRect)?.x ?? 0,
+                          top: (dataWindowRect ?? selectedPartDataWindowRect)?.y ?? 0,
+                          visibility: rawPixelData ? 'visible' : 'hidden',
                         }}
                       />
                       
