@@ -1,6 +1,7 @@
 import React from 'react';
 import { LogEntry, LogStatus } from '../types';
 import { CheckCircle2, AlertTriangle, XCircle, Clock, ChevronDown, ChevronRight, Activity } from 'lucide-react';
+import { SubPanel } from './SubPanel';
 
 interface LogPanelProps {
   logs: LogEntry[];
@@ -139,13 +140,14 @@ export const LogPanel: React.FC<LogPanelProps> = ({ logs }) => {
   }, [logs.length]);
 
   return (
-    <div className="h-full flex flex-col bg-neutral-900">
-      <div className="p-3 border-b border-neutral-800 bg-neutral-900 sticky top-0 z-10">
-        <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-500 flex items-center">
-          <Activity className="w-3 h-3 mr-2" /> Pipeline Log
-        </h2>
-      </div>
-      <div className="flex-1 overflow-y-auto p-4">
+    <SubPanel
+      title="Pipeline Log"
+      icon={<Activity className="w-3 h-3" />}
+      className="h-full"
+      bodyClassName="flex-1 overflow-y-auto p-4"
+      stickyHeader
+    >
+      <>
         {logs.length === 0 ? (
           <div className="text-center mt-10 text-neutral-600 text-sm">
             <p>No operations yet.</p>
@@ -159,7 +161,7 @@ export const LogPanel: React.FC<LogPanelProps> = ({ logs }) => {
           </div>
         )}
         <div ref={bottomRef} />
-      </div>
-    </div>
+      </>
+    </SubPanel>
   );
 };

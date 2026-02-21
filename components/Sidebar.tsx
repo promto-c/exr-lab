@@ -1,16 +1,34 @@
 import React from 'react';
-import { Layers, Box, FileImage, FolderOpen, Eye } from 'lucide-react';
+import { Layers, Box, FileImage, FilePlus2, FolderOpen, FolderTree, Eye } from 'lucide-react';
 import { ExrStructure, ExrPart } from '../types';
+import { SubPanel } from './SubPanel';
 
 const GITHUB_SIMPLE_ICON_PATH = "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12";
 
-interface SidebarProps {
+interface SidebarHeaderProps {
+  onOpenFile: () => void;
+  onOpenFolder: () => void;
+}
+
+interface SourcesPanelProps {
+  sequenceSources: {
+    id: string;
+    label: string;
+    frameCount: number;
+  }[];
+  selectedSequenceSourceId: string | null;
+  onSelectSequenceSource: (sourceId: string) => void;
+  className?: string;
+}
+
+interface StructurePanelProps {
   structure: ExrStructure | null;
   selectedPartId: number | null;
   onSelectPart: (partId: number) => void;
   onSelectLayer: (partId: number, layerPrefix: string) => void;
   onSelectChannel: (partId: number, channelName: string) => void;
   onOpenFile: () => void;
+  className?: string;
 }
 
 const PartItem: React.FC<{ 
@@ -101,73 +119,139 @@ const PartItem: React.FC<{
   );
 };
 
-export const Sidebar: React.FC<SidebarProps> = ({ 
-  structure, 
-  selectedPartId, 
-  onSelectPart,
-  onSelectLayer,
-  onSelectChannel,
-  onOpenFile
+const cx = (...classes: Array<string | false | null | undefined>): string =>
+  classes.filter(Boolean).join(' ');
+
+export const SidebarHeader: React.FC<SidebarHeaderProps> = ({
+  onOpenFile,
+  onOpenFolder
 }) => {
   const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0';
 
   return (
-    <div className="h-full flex flex-col w-full bg-neutral-900">
-      <div className="p-3 border-b border-neutral-800 shrink-0 flex items-center justify-between">
-        <h1 className="text-sm font-bold flex items-center text-neutral-100">
-          <FileImage className="w-5 h-5 mr-2 text-teal-500" />
-          EXR Lab
-          <span className="ml-2 text-[10px] bg-neutral-800 text-neutral-400 px-1.5 py-0 rounded">v{appVersion}</span>
-          <a
-            href="https://github.com/promto-c/exr-lab"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-1 inline-flex items-center justify-center bg-neutral-800 text-neutral-400 px-1 py-1 rounded hover:bg-neutral-700 hover:text-neutral-200 transition-colors"
-            title="Open project repository"
-            aria-label="Open EXR Lab GitHub repository"
-          >
-            <svg viewBox="0 0 24 24" className="w-3 h-3 fill-current" aria-hidden="true">
-              <path d={GITHUB_SIMPLE_ICON_PATH} />
-            </svg>
-          </a>
-        </h1>
-        <button 
+    <div className="p-3 border-b border-neutral-800 shrink-0 flex items-center justify-between">
+      <h1 className="text-sm font-bold flex items-center text-neutral-100">
+        <FileImage className="w-5 h-5 mr-2 text-teal-500" />
+        EXR Lab
+        <span className="ml-2 text-[10px] bg-neutral-800 text-neutral-400 px-1.5 py-0 rounded">v{appVersion}</span>
+        <a
+          href="https://github.com/promto-c/exr-lab"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="ml-1 inline-flex items-center justify-center bg-neutral-800 text-neutral-400 px-1 py-1 rounded hover:bg-neutral-700 hover:text-neutral-200 transition-colors"
+          title="Open project repository"
+          aria-label="Open EXR Lab GitHub repository"
+        >
+          <svg viewBox="0 0 24 24" className="w-3 h-3 fill-current" aria-hidden="true">
+            <path d={GITHUB_SIMPLE_ICON_PATH} />
+          </svg>
+        </a>
+      </h1>
+      <div className="flex items-center gap-1">
+        <button
           onClick={onOpenFile}
           className="p-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white rounded transition-colors"
           title="Open File"
         >
+          <FilePlus2 className="w-4 h-4" />
+        </button>
+        <button
+          onClick={onOpenFolder}
+          className="p-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white rounded transition-colors"
+          title="Bind Local Folder"
+        >
           <FolderOpen className="w-4 h-4" />
         </button>
       </div>
-      
-      <div className="flex-1 overflow-y-auto p-3">
-        {!structure ? (
-          <div 
-            className="flex flex-col items-center justify-center h-40 text-neutral-600 space-y-3 mt-10 cursor-pointer hover:text-neutral-500 transition-colors"
-            onClick={onOpenFile}
-          >
-            <FolderOpen className="w-8 h-8 opacity-50" />
-            <p className="text-xs text-center px-4">Click to Open<br/>or Drag & Drop</p>
-          </div>
-        ) : (
-          <div>
-            <div className="flex items-center justify-between mb-3 px-1">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-500">Structure</h2>
-              <span className="text-[10px] text-neutral-600">{structure.parts.length} Part{structure.parts.length !== 1 ? 's' : ''}</span>
-            </div>
-            {structure.parts.map(part => (
-              <PartItem 
-                key={part.id} 
-                part={part} 
-                isSelected={selectedPartId === part.id}
-                onClick={() => onSelectPart(part.id)}
-                onSelectLayer={(layer) => onSelectLayer(part.id, layer)}
-                onSelectChannel={(ch) => onSelectChannel(part.id, ch)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
     </div>
+  );
+};
+
+export const SourcesPanel: React.FC<SourcesPanelProps> = ({
+  sequenceSources,
+  selectedSequenceSourceId,
+  onSelectSequenceSource,
+  className,
+}) => {
+  if (sequenceSources.length === 0) return null;
+
+  return (
+    <SubPanel
+      title="Sources"
+      icon={<FolderTree className="w-3 h-3" />}
+      headerRight={<span className="text-[10px] text-neutral-600">{sequenceSources.length}</span>}
+      className={cx('rounded-lg border border-neutral-800 overflow-hidden', className)}
+      bodyClassName="p-4"
+    >
+      <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
+        {sequenceSources.map((source) => {
+          const isActive = source.id === selectedSequenceSourceId;
+          return (
+            <button
+              key={source.id}
+              onClick={() => onSelectSequenceSource(source.id)}
+              className={`w-full rounded-md border px-2 py-1.5 text-left transition-colors ${
+                isActive
+                  ? 'border-teal-500/40 bg-teal-900/20 text-teal-200'
+                  : 'border-neutral-800 bg-neutral-900/40 text-neutral-300 hover:border-neutral-700 hover:bg-neutral-800/60'
+              }`}
+              title={source.label}
+            >
+              <div className="text-[11px] truncate font-medium">{source.label}</div>
+              <div className={`text-[10px] ${isActive ? 'text-teal-300/80' : 'text-neutral-500'}`}>
+                {source.frameCount} frame{source.frameCount !== 1 ? 's' : ''}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </SubPanel>
+  );
+};
+
+export const StructurePanel: React.FC<StructurePanelProps> = ({
+  structure,
+  selectedPartId,
+  onSelectPart,
+  onSelectLayer,
+  onSelectChannel,
+  onOpenFile,
+  className,
+}) => {
+  return (
+    <SubPanel
+      title="Structure"
+      icon={<Layers className="w-3 h-3" />}
+      headerRight={
+        structure ? (
+          <span className="text-[10px] text-neutral-600">
+            {structure.parts.length} Part{structure.parts.length !== 1 ? 's' : ''}
+          </span>
+        ) : null
+      }
+      className={cx('rounded-lg border border-neutral-800 overflow-hidden min-h-0 flex-1', className)}
+      bodyClassName="p-4 flex-1 overflow-y-auto"
+    >
+      {!structure ? (
+        <div
+          className="flex flex-col items-center justify-center h-40 text-neutral-600 space-y-3 cursor-pointer hover:text-neutral-500 transition-colors"
+          onClick={onOpenFile}
+        >
+          <FolderOpen className="w-8 h-8 opacity-50" />
+          <p className="text-xs text-center px-4">Open file/folder<br/>or Drag & Drop</p>
+        </div>
+      ) : (
+        structure.parts.map(part => (
+          <PartItem
+            key={part.id}
+            part={part}
+            isSelected={selectedPartId === part.id}
+            onClick={() => onSelectPart(part.id)}
+            onSelectLayer={(layer) => onSelectLayer(part.id, layer)}
+            onSelectChannel={(ch) => onSelectChannel(part.id, ch)}
+          />
+        ))
+      )}
+    </SubPanel>
   );
 };

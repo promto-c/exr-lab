@@ -1,5 +1,6 @@
 import React from 'react';
-import { Sidebar } from './components/Sidebar';
+import { SidebarHeader, SourcesPanel, StructurePanel } from './components/Sidebar';
+import { SidebarLayout } from './components/SidebarLayout';
 import { LogPanel } from './components/LogPanel';
 import { DropZone } from './components/DropZone';
 import { HistogramOverlay } from './components/HistogramOverlay';
@@ -68,6 +69,213 @@ const getLayerMapping = (channels: ExrChannel[], layerPrefix: string): ChannelMa
 
   return map;
 };
+
+type SequenceFrame = {
+  id: string;
+  file: File;
+  name: string;
+  relativePath: string;
+  sequenceKey: string;
+  frameNumber: number | null;
+};
+
+type SequenceSource = {
+  id: string;
+  label: string;
+  frames: SequenceFrame[];
+};
+
+type SequenceDescriptor = {
+  sequenceKey: string;
+  frameNumber: number | null;
+  frameDigits: string;
+  sequencePath: string;
+  extension: string;
+};
+
+type FileLoadOptions = {
+  autoFit?: boolean;
+  displayName?: string;
+};
+
+const EXR_FILE_PATTERN = /\.exr$/i;
+const DEFAULT_SEQUENCE_FPS = 24;
+
+const isExrPath = (path: string): boolean => EXR_FILE_PATTERN.test(path);
+
+const getRelativePath = (file: File): string => {
+  const relative =
+    typeof file.webkitRelativePath === 'string' && file.webkitRelativePath.length > 0
+      ? file.webkitRelativePath
+      : file.name;
+
+  return relative.replace(/\\/g, '/');
+};
+
+const getSequenceDescriptor = (relativePath: string): SequenceDescriptor => {
+  const normalizedPath = relativePath.replace(/\\/g, '/');
+  const slashIndex = normalizedPath.lastIndexOf('/');
+  const directory = slashIndex >= 0 ? normalizedPath.slice(0, slashIndex) : '';
+  const fileName = slashIndex >= 0 ? normalizedPath.slice(slashIndex + 1) : normalizedPath;
+  const dotIndex = fileName.lastIndexOf('.');
+  const extension = dotIndex >= 0 ? fileName.slice(dotIndex) : '';
+  const stem = dotIndex >= 0 ? fileName.slice(0, dotIndex) : fileName;
+  const match = stem.match(/^(.*?)(\d+)$/);
+
+  if (!match) {
+    const sequencePath = directory ? `${directory}/${stem}` : stem;
+    return {
+      sequenceKey: `${sequencePath.toLowerCase()}${extension.toLowerCase()}`,
+      frameNumber: null,
+      frameDigits: '',
+      sequencePath,
+      extension,
+    };
+  }
+
+  const prefix = match[1];
+  const frameDigits = match[2];
+  const frameNumber = Number.parseInt(frameDigits, 10);
+  const sequencePath = directory ? `${directory}/${prefix}` : prefix;
+  return {
+    sequenceKey: `${sequencePath.toLowerCase()}#${extension.toLowerCase()}`,
+    frameNumber: Number.isFinite(frameNumber) ? frameNumber : null,
+    frameDigits,
+    sequencePath,
+    extension,
+  };
+};
+
+const sortSequenceEntries = (a: SequenceFrame, b: SequenceFrame): number => {
+  if (a.sequenceKey === b.sequenceKey && a.frameNumber !== null && b.frameNumber !== null && a.frameNumber !== b.frameNumber) {
+    return a.frameNumber - b.frameNumber;
+  }
+
+  return a.relativePath.localeCompare(b.relativePath, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+};
+
+const formatFrame = (frame: number, padding: number): string => String(frame).padStart(Math.max(padding, 1), '0');
+
+const buildSequenceSourcesFromFiles = (files: File[]): SequenceSource[] => {
+  const exrEntries = files
+    .map((file) => {
+      const relativePath = getRelativePath(file);
+      if (!isExrPath(relativePath)) return null;
+      const sequence = getSequenceDescriptor(relativePath);
+
+      return {
+        file,
+        relativePath,
+        name: relativePath.split('/').pop() || file.name,
+        sequenceKey: sequence.sequenceKey,
+        frameNumber: sequence.frameNumber,
+        frameDigits: sequence.frameDigits,
+        sequencePath: sequence.sequencePath,
+        extension: sequence.extension,
+      };
+    })
+    .filter((entry): entry is {
+      file: File;
+      relativePath: string;
+      name: string;
+      sequenceKey: string;
+      frameNumber: number | null;
+      frameDigits: string;
+      sequencePath: string;
+      extension: string;
+    } => entry !== null);
+
+  if (exrEntries.length === 0) return [];
+
+  const groups = new Map<string, {
+    sequenceKey: string;
+    sequencePath: string;
+    extension: string;
+    maxFrameDigits: number;
+    frames: SequenceFrame[];
+  }>();
+  for (const entry of exrEntries) {
+    const group = groups.get(entry.sequenceKey);
+    const frame: SequenceFrame = {
+      id: `${entry.relativePath}-${entry.sequenceKey}`,
+      file: entry.file,
+      name: entry.name,
+      relativePath: entry.relativePath,
+      sequenceKey: entry.sequenceKey,
+      frameNumber: entry.frameNumber,
+    };
+
+    if (group) {
+      group.frames.push(frame);
+      group.maxFrameDigits = Math.max(group.maxFrameDigits, entry.frameDigits.length);
+    } else {
+      groups.set(entry.sequenceKey, {
+        sequenceKey: entry.sequenceKey,
+        sequencePath: entry.sequencePath,
+        extension: entry.extension,
+        maxFrameDigits: entry.frameDigits.length,
+        frames: [frame],
+      });
+    }
+  }
+
+  return Array.from(groups.values())
+    .map((group) => {
+      const frames = [...group.frames].sort(sortSequenceEntries);
+      const numberedFrames = frames.filter((frame): frame is SequenceFrame & { frameNumber: number } => frame.frameNumber !== null);
+
+      let label: string;
+      if (numberedFrames.length > 0) {
+        const minFrame = numberedFrames[0].frameNumber;
+        const maxFrame = numberedFrames[numberedFrames.length - 1].frameNumber;
+        const padding = Math.max(
+          group.maxFrameDigits,
+          String(minFrame).length,
+          String(maxFrame).length
+        );
+        label = `${group.sequencePath}.[${formatFrame(minFrame, padding)}-${formatFrame(maxFrame, padding)}]${group.extension}`;
+      } else if (frames.length === 1) {
+        label = frames[0].relativePath;
+      } else {
+        label = `${group.sequencePath}${group.extension}`;
+      }
+
+      return {
+        id: group.sequenceKey,
+        label,
+        frames,
+      };
+    })
+    .sort((a, b) => {
+      if (b.frames.length !== a.frames.length) {
+        return b.frames.length - a.frames.length;
+      }
+      return a.label.localeCompare(b.label, undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      });
+    });
+};
+
+const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> => (
+  new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        resolve(event.target.result as ArrayBuffer);
+      } else {
+        reject(new Error(`Failed to read "${file.name}".`));
+      }
+    };
+    reader.onerror = () => {
+      reject(reader.error ?? new Error(`Failed to read "${file.name}".`));
+    };
+    reader.readAsArrayBuffer(file);
+  })
+);
 
 type PrecisionSliderProps = {
   value: number;
@@ -285,6 +493,11 @@ export default function App() {
   const [fileBuffer, setFileBuffer] = React.useState<ArrayBuffer | null>(null);
   const [fileName, setFileName] = React.useState<string | null>(null);
   const [isProcessing, setIsProcessing] = React.useState(false);
+  const [sequenceSources, setSequenceSources] = React.useState<SequenceSource[]>([]);
+  const [selectedSequenceSourceId, setSelectedSequenceSourceId] = React.useState<string | null>(null);
+  const [sequenceFrames, setSequenceFrames] = React.useState<SequenceFrame[]>([]);
+  const [sequenceFrameIndex, setSequenceFrameIndex] = React.useState<number | null>(null);
+  const [isSequencePlaying, setIsSequencePlaying] = React.useState(false);
 
   // Raw Data Cache (Map of Float32Arrays)
   const [rawPixelData, setRawPixelData] = React.useState<RawDecodeResult | null>(null);
@@ -328,9 +541,7 @@ export default function App() {
 
   // Layout State
   const [sidebarWidth, setSidebarWidth] = React.useState(320);
-  const [logHeight, setLogHeight] = React.useState(() => window.innerHeight / 2);
   const [isResizingSidebar, setIsResizingSidebar] = React.useState(false);
-  const [isResizingLogs, setIsResizingLogs] = React.useState(false);
 
   // Mobile/Responsive State
   const [isMobile, setIsMobile] = React.useState(window.innerWidth <= 768);
@@ -341,9 +552,12 @@ export default function App() {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const folderInputRef = React.useRef<HTMLInputElement>(null);
   const rendererRef = React.useRef<Renderer | null>(null);
   const decodeEpochRef = React.useRef(0);
   const shouldAutoFitRef = React.useRef(true);
+  const sequenceSelectionEpochRef = React.useRef(0);
+  const sequenceAutoFitRef = React.useRef(false);
 
   // Resize Listener
   React.useEffect(() => {
@@ -359,7 +573,31 @@ export default function App() {
       return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  React.useEffect(() => {
+    const input = folderInputRef.current;
+    if (!input) return;
+    input.setAttribute('webkitdirectory', '');
+    input.setAttribute('directory', '');
+  }, []);
+
   const canInteractWithViewport = Boolean(structure && rawPixelData);
+  const hasSequenceFrames = sequenceFrames.length > 0;
+  const canPlaySequence = sequenceFrames.length > 1;
+  const selectedSequenceSource =
+    selectedSequenceSourceId !== null
+      ? sequenceSources.find((source) => source.id === selectedSequenceSourceId) ?? null
+      : null;
+  const safeSequenceFrameIndex =
+    sequenceFrameIndex !== null
+      ? clamp(sequenceFrameIndex, 0, Math.max(sequenceFrames.length - 1, 0))
+      : null;
+
+  React.useEffect(() => {
+    if (!canPlaySequence && isSequencePlaying) {
+      setIsSequencePlaying(false);
+    }
+  }, [canPlaySequence, isSequencePlaying]);
+
   const selectedPart = React.useMemo(() => {
     if (!structure || selectedPartId === null) return null;
     return structure.parts.find((part) => part.id === selectedPartId) || null;
@@ -520,23 +758,18 @@ export default function App() {
         const newWidth = Math.max(200, Math.min(e.clientX, 800));
         setSidebarWidth(newWidth);
       }
-      if (isResizingLogs) {
-        const newHeight = Math.max(100, Math.min(window.innerHeight - e.clientY, window.innerHeight - 200));
-        setLogHeight(newHeight);
-      }
     };
 
     const handleGlobalMouseUp = () => {
       setIsResizingSidebar(false);
-      setIsResizingLogs(false);
       document.body.style.cursor = 'default';
       document.body.style.userSelect = 'auto';
     };
 
-    if (isResizingSidebar || isResizingLogs) {
+    if (isResizingSidebar) {
       window.addEventListener('mousemove', handleGlobalMouseMove);
       window.addEventListener('mouseup', handleGlobalMouseUp);
-      document.body.style.cursor = isResizingSidebar ? 'col-resize' : 'row-resize';
+      document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
     }
 
@@ -546,7 +779,7 @@ export default function App() {
       document.body.style.cursor = 'default';
       document.body.style.userSelect = 'auto';
     };
-  }, [isResizingSidebar, isResizingLogs]);
+  }, [isResizingSidebar]);
 
   const handleLog = React.useCallback((entry: LogEntry) => {
     setLogs(prev => [...prev, entry]);
@@ -672,39 +905,60 @@ export default function App() {
     }
   };
 
-  const handleFileLoaded = async (name: string, buffer: ArrayBuffer) => {
+  const clearSequenceBinding = () => {
+    sequenceSelectionEpochRef.current += 1;
+    sequenceAutoFitRef.current = false;
+    setSequenceSources([]);
+    setSelectedSequenceSourceId(null);
+    setSequenceFrames([]);
+    setSequenceFrameIndex(null);
+    setIsSequencePlaying(false);
+  };
+
+  const activateSequenceSource = (source: SequenceSource, autoFit = true) => {
+    sequenceSelectionEpochRef.current += 1;
+    sequenceAutoFitRef.current = autoFit;
+    setIsSequencePlaying(false);
+    setSelectedSequenceSourceId(source.id);
+    setSequenceFrames(source.frames);
+    setSequenceFrameIndex(0);
+  };
+
+  const handleFileLoaded = async (name: string, buffer: ArrayBuffer, options: FileLoadOptions = {}) => {
     decodeEpochRef.current += 1;
-    shouldAutoFitRef.current = true;
-    setFileName(name);
+    shouldAutoFitRef.current = options.autoFit ?? true;
+    const displayName = options.displayName ?? name;
+
+    setFileName(displayName);
     setFileBuffer(buffer);
-    setLogs([]); 
+    setLogs([]);
     setStructure(null);
     setSelectedPartId(null);
-    setHistogramData(null); 
+    setHistogramData(null);
     setRawPixelData(null);
     setViewMode('rgb');
     setInspectCursor(null);
     setIsProcessing(true);
-    
+
     // Close sidebar on mobile when file loaded
     if (isMobile) setIsSidebarOpen(false);
-    
+
     // Clear the part cache when loading a new file
     partCacheRef.current.clear();
 
     try {
       const fileSizeMB = (buffer.byteLength / 1024 / 1024).toFixed(2);
-      
+
       handleLog({
-        id: 'init',
+        id: `init-${Date.now()}`,
         stepId: 'init',
         title: 'File Loaded',
         status: LogStatus.Start,
         ms: 0,
         metrics: [
-          { label: 'File', value: name },
-          { label: 'Size', value: `${fileSizeMB} MB` }
-        ]
+          { label: 'File', value: displayName },
+          { label: 'Size', value: `${fileSizeMB} MB` },
+        ],
       });
 
       handleLog({
@@ -717,29 +971,28 @@ export default function App() {
           { label: 'Requested', value: rendererPreference },
           { label: 'Active', value: rendererBackend },
         ],
-        description: rendererFallbackReason || undefined
+        description: rendererFallbackReason || undefined,
       });
 
       const parser = new ExrParser(buffer, handleLog);
       const result = await parser.parse();
-      
+
       if (result) {
         setStructure(result);
         if (result.parts.length > 0) {
-            setSelectedPartId(result.parts[0].id);
-            setChannelMapping(guessChannels(result.parts[0].channels));
+          setSelectedPartId(result.parts[0].id);
+          setChannelMapping(guessChannels(result.parts[0].channels));
         }
       }
-
     } catch (e: any) {
       handleLog({
-        id: 'error',
+        id: `error-${Date.now()}`,
         stepId: 'crash',
         title: 'Unexpected Error',
         status: LogStatus.Error,
         ms: 0,
         metrics: [],
-        description: e.message
+        description: e.message,
       });
       console.error(e);
     } finally {
@@ -747,19 +1000,174 @@ export default function App() {
     }
   };
 
-  const handleGlobalFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) {
-          const reader = new FileReader();
-          reader.onload = (evt) => {
-              if (evt.target?.result) {
-                  handleFileLoaded(file.name, evt.target.result as ArrayBuffer);
-              }
-          };
-          reader.readAsArrayBuffer(file);
-      }
-      e.target.value = '';
+  const handleSingleFileLoaded = async (name: string, buffer: ArrayBuffer) => {
+    clearSequenceBinding();
+    await handleFileLoaded(name, buffer, { autoFit: true, displayName: name });
   };
+
+  const loadSingleFile = async (file: File) => {
+    if (!isExrPath(file.name)) {
+      handleLog({
+        id: `single-file-invalid-${Date.now()}`,
+        stepId: 'sequence',
+        title: 'Unsupported File',
+        status: LogStatus.Warn,
+        ms: 0,
+        metrics: [{ label: 'File', value: file.name }],
+        description: 'Only EXR files are supported for preview.',
+      });
+      return;
+    }
+
+    clearSequenceBinding();
+    const buffer = await readFileAsArrayBuffer(file);
+    await handleFileLoaded(file.name, buffer, { autoFit: true, displayName: file.name });
+  };
+
+  const bindFilesAsSequence = (files: File[]) => {
+    const sources = buildSequenceSourcesFromFiles(files);
+    if (sources.length === 0) {
+      handleLog({
+        id: `bind-folder-empty-${Date.now()}`,
+        stepId: 'sequence',
+        title: 'Folder Bind Failed',
+        status: LogStatus.Warn,
+        ms: 0,
+        metrics: [{ label: 'Items', value: files.length }],
+        description: 'No EXR files were found in the selected input.',
+      });
+      return;
+    }
+
+    const selectedSource = sources[0];
+    const sourceText = sources.length > 1 ? `${sources.length} sources` : '1 source';
+    const frameText = selectedSource.frames.length > 1 ? `${selectedSource.frames.length} frames` : '1 frame';
+
+    setSequenceSources(sources);
+    activateSequenceSource(selectedSource, true);
+
+    handleLog({
+      id: `bind-folder-${Date.now()}`,
+      stepId: 'sequence',
+      title: 'Folder Bound',
+      status: LogStatus.Ok,
+      ms: 0,
+      metrics: [
+        { label: 'Sources', value: sourceText },
+        { label: 'Selected', value: selectedSource.label },
+        { label: 'Frames', value: frameText },
+      ],
+      description: sources.length > 1
+        ? 'Use the Sources panel to switch playlist groups.'
+        : 'Single EXR source was bound for playback.',
+    });
+  };
+
+  const handleSelectSequenceSource = (sourceId: string) => {
+    if (sourceId === selectedSequenceSourceId) return;
+    const source = sequenceSources.find((item) => item.id === sourceId);
+    if (!source) return;
+
+    activateSequenceSource(source, true);
+    handleLog({
+      id: `sequence-source-${Date.now()}`,
+      stepId: 'sequence',
+      title: 'Source Selected',
+      status: LogStatus.Ok,
+      ms: 0,
+      metrics: [
+        { label: 'Source', value: source.label },
+        { label: 'Frames', value: source.frames.length },
+      ],
+    });
+  };
+
+  const handleGlobalFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 1) {
+      void loadSingleFile(files[0]);
+    } else if (files.length > 1) {
+      bindFilesAsSequence(files);
+    }
+
+    e.target.value = '';
+  };
+
+  const handleGlobalFolderInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length > 0) {
+      bindFilesAsSequence(files);
+    }
+
+    e.target.value = '';
+  };
+
+  const openFolderPicker = () => {
+    folderInputRef.current?.click();
+  };
+
+  const stepSequenceFrame = (direction: 1 | -1) => {
+    if (sequenceFrames.length === 0) return;
+
+    setIsSequencePlaying(false);
+    sequenceAutoFitRef.current = false;
+    setSequenceFrameIndex((previousIndex) => {
+      const base = previousIndex ?? 0;
+      const next = base + direction;
+      if (next < 0) return sequenceFrames.length - 1;
+      if (next >= sequenceFrames.length) return 0;
+      return next;
+    });
+  };
+
+  React.useEffect(() => {
+    if (safeSequenceFrameIndex === null) return;
+
+    const frame = sequenceFrames[safeSequenceFrameIndex];
+    if (!frame) return;
+
+    const requestId = ++sequenceSelectionEpochRef.current;
+    const shouldAutoFit = sequenceAutoFitRef.current;
+    sequenceAutoFitRef.current = false;
+
+    const loadSelectedFrame = async () => {
+      try {
+        const buffer = await readFileAsArrayBuffer(frame.file);
+        if (requestId !== sequenceSelectionEpochRef.current) return;
+        await handleFileLoaded(frame.name, buffer, {
+          autoFit: shouldAutoFit,
+          displayName: selectedSequenceSource?.label ?? frame.relativePath,
+        });
+      } catch (error: any) {
+        if (requestId !== sequenceSelectionEpochRef.current) return;
+        handleLog({
+          id: `sequence-load-error-${Date.now()}`,
+          stepId: 'sequence',
+          title: 'Sequence Frame Load Failed',
+          status: LogStatus.Error,
+          ms: 0,
+          metrics: [{ label: 'Frame', value: frame.relativePath }],
+          description: error?.message || String(error),
+        });
+      }
+    };
+
+    void loadSelectedFrame();
+  }, [safeSequenceFrameIndex, selectedSequenceSource?.label, sequenceFrames]);
+
+  React.useEffect(() => {
+    if (!isSequencePlaying || !canPlaySequence || isProcessing) return;
+
+    const intervalMs = 1000 / DEFAULT_SEQUENCE_FPS;
+    const timer = window.setInterval(() => {
+      setSequenceFrameIndex((previousIndex) => {
+        const base = previousIndex ?? 0;
+        return (base + 1) % sequenceFrames.length;
+      });
+    }, intervalMs);
+
+    return () => window.clearInterval(timer);
+  }, [canPlaySequence, isProcessing, isSequencePlaying, sequenceFrames.length]);
 
   const handleSelectPart = (partId: number) => {
     if (selectedPartId !== partId) {
@@ -1171,6 +1579,53 @@ export default function App() {
     </div>
   );
 
+  const sidebarPanes = [
+    ...(sequenceSources.length > 0
+      ? [
+          {
+            id: 'sources',
+            initialRatio: 0.2,
+            minSize: 110,
+            mobileSize: 'auto' as const,
+            content: (
+              <SourcesPanel
+                sequenceSources={sequenceSources.map((source) => ({
+                  id: source.id,
+                  label: source.label,
+                  frameCount: source.frames.length,
+                }))}
+                selectedSequenceSourceId={selectedSequenceSourceId}
+                onSelectSequenceSource={handleSelectSequenceSource}
+              />
+            ),
+          },
+        ]
+      : []),
+    {
+      id: 'structure',
+      initialRatio: 0.45,
+      minSize: 180,
+      mobileSize: 'fill' as const,
+      content: (
+        <StructurePanel
+          structure={structure}
+          onSelectPart={handleSelectPart}
+          onSelectLayer={handleSelectLayer}
+          onSelectChannel={handleSelectChannel}
+          selectedPartId={selectedPartId}
+          onOpenFile={() => fileInputRef.current?.click()}
+        />
+      ),
+    },
+    {
+      id: 'logs',
+      initialRatio: 0.35,
+      minSize: 140,
+      mobileSize: '40%',
+      content: <LogPanel logs={logs} />,
+    },
+  ];
+
   return (
     <div
       className="flex h-screen w-screen box-border bg-neutral-950 text-neutral-200 font-sans overflow-hidden"
@@ -1191,7 +1646,7 @@ export default function App() {
           />
       )}
 
-      {/* Left Panel: Sidebar + Logs */}
+      {/* Left Panel: Header + Sources + Structure + Logs */}
       {(isMobile || isSidebarOpen) && (
         <div
           className={`flex flex-col bg-neutral-900 z-40 h-full transition-transform duration-300 ease-in-out border-r border-neutral-800 shadow-2xl ${
@@ -1202,38 +1657,16 @@ export default function App() {
             transform: isMobile && !isSidebarOpen ? 'translateX(-100%)' : 'none',
           }}
         >
-          {/* Top: Structure */}
-          <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
-            <Sidebar
-              structure={structure}
-              onSelectPart={handleSelectPart}
-              onSelectLayer={handleSelectLayer}
-              onSelectChannel={handleSelectChannel}
-              selectedPartId={selectedPartId}
-              onOpenFile={() => fileInputRef.current?.click()}
-            />
-          </div>
-
-          {/* Horizontal Splitter (Sidebar vs Logs) - Only on Desktop */}
-          {!isMobile && (
-            <div
-              className="h-1 bg-neutral-950 border-y border-neutral-800/50 hover:bg-teal-500 cursor-row-resize flex items-center justify-center transition-colors shrink-0 z-20"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                setIsResizingLogs(true);
-              }}
-            >
-              <div className="w-12 h-0.5 bg-neutral-700/50 rounded-full pointer-events-none" />
-            </div>
-          )}
-
-          {/* Bottom: Logs - Fixed height on Mobile or Resizable on Desktop */}
-          <div
-            className="shrink-0 overflow-hidden flex flex-col border-t border-neutral-800"
-            style={{ height: isMobile ? '40%' : logHeight }}
-          >
-            <LogPanel logs={logs} />
-          </div>
+          <SidebarLayout
+            isMobile={isMobile}
+            header={
+              <SidebarHeader
+                onOpenFile={() => fileInputRef.current?.click()}
+                onOpenFolder={openFolderPicker}
+              />
+            }
+            panes={sidebarPanes}
+          />
         </div>
       )}
 
@@ -1245,7 +1678,7 @@ export default function App() {
           ></div>
       )}
 
-      <div className={`flex-1 flex flex-col relative overflow-hidden min-w-0 ${isResizingSidebar || isResizingLogs ? 'pointer-events-none' : ''}`}>
+      <div className={`flex-1 flex flex-col relative overflow-hidden min-w-0 ${isResizingSidebar ? 'pointer-events-none' : ''}`}>
         {/* Toolbar */}
         <div className="h-14 border-b border-neutral-800 bg-neutral-900 flex items-center px-4 justify-between shrink-0 z-20 relative shadow-md">
             
@@ -1263,10 +1696,39 @@ export default function App() {
                   <span className="font-semibold text-neutral-300 text-sm truncate">{fileName || "No File"}</span>
                   {structure && (
                     <span className="text-[10px] text-neutral-500 truncate">
-                       {structure.isMultipart ? 'Multipart' : 'Single'} • {rawPixelData ? `${rawPixelData.width}x${rawPixelData.height}` : ''}
+                       {structure.isMultipart ? 'Multipart' : 'Single'} | {rawPixelData ? `${rawPixelData.width}x${rawPixelData.height}` : ''}
                     </span>
                   )}
                 </div>
+
+                {hasSequenceFrames && !isMobile && (
+                  <div className="flex items-center gap-1 rounded-lg border border-neutral-700 bg-neutral-800/60 px-1.5 py-1 shrink-0">
+                    <button
+                      onClick={() => stepSequenceFrame(-1)}
+                      disabled={isProcessing}
+                      className="px-2 py-1 rounded text-[10px] font-medium text-neutral-300 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      title="Previous Frame"
+                    >
+                      Prev
+                    </button>
+                    <button
+                      onClick={() => setIsSequencePlaying((prev) => !prev)}
+                      disabled={!canPlaySequence}
+                      className="px-2 py-1 rounded text-[10px] font-medium text-neutral-200 bg-teal-700/40 hover:bg-teal-600/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      title={isSequencePlaying ? 'Pause Playback' : `Play Sequence (${DEFAULT_SEQUENCE_FPS} fps)`}
+                    >
+                      {isSequencePlaying ? 'Pause' : 'Play'}
+                    </button>
+                    <button
+                      onClick={() => stepSequenceFrame(1)}
+                      disabled={isProcessing}
+                      className="px-2 py-1 rounded text-[10px] font-medium text-neutral-300 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      title="Next Frame"
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
 
                 {structure && !isMobile && (
                   <div className="hidden lg:flex items-center space-x-1">
@@ -1374,6 +1836,33 @@ export default function App() {
                         <Crosshair className="w-3.5 h-3.5" />
                         Inspector
                       </button>
+                      {hasSequenceFrames && (
+                        <button
+                          onClick={() => { stepSequenceFrame(-1); setIsMobileActionsOpen(false); }}
+                          className={toolbarActionItemClass(false)}
+                        >
+                          Prev Frame
+                        </button>
+                      )}
+                      {hasSequenceFrames && (
+                        <button
+                          onClick={() => {
+                            setIsSequencePlaying(prev => !prev);
+                            setIsMobileActionsOpen(false);
+                          }}
+                          className={toolbarActionItemClass(isSequencePlaying)}
+                        >
+                          {isSequencePlaying ? 'Pause Sequence' : `Play Sequence (${DEFAULT_SEQUENCE_FPS} fps)`}
+                        </button>
+                      )}
+                      {hasSequenceFrames && (
+                        <button
+                          onClick={() => { stepSequenceFrame(1); setIsMobileActionsOpen(false); }}
+                          className={toolbarActionItemClass(false)}
+                        >
+                          Next Frame
+                        </button>
+                      )}
                       <button
                         onClick={() => { setShowHelp(prev => !prev); setIsMobileActionsOpen(false); }}
                         className={toolbarActionItemClass(showHelp)}
@@ -1404,7 +1893,12 @@ export default function App() {
         >
           {!structure ? (
               <div className="flex items-center justify-center h-full relative z-10 px-4">
-                  <DropZone onFileLoaded={handleFileLoaded} className="w-full max-w-md" />
+                  <DropZone
+                    onFileLoaded={handleSingleFileLoaded}
+                    onFilesLoaded={bindFilesAsSequence}
+                    onOpenFolder={openFolderPicker}
+                    className="w-full max-w-md"
+                  />
               </div>
           ) : (
               <>
@@ -1481,6 +1975,7 @@ export default function App() {
                               <li>Click <strong>Header</strong> to decode a specific part.</li>
                               <li>Click <strong>Layer Name</strong> to map RGB channels.</li>
                               <li>Click <strong>Channel</strong> to view in Grayscale.</li>
+                              <li>Use <strong>Open Folder</strong> to bind EXR sequences.</li>
                           </ul>
                       </div>
                       
@@ -1494,6 +1989,7 @@ export default function App() {
                               <li><strong>A</strong> toggles RGB and Alpha view.</li>
                               <li>Use <strong>Inspector</strong> tool for pixel values.</li>
                               <li>Click <strong>Sun/Monitor</strong> icons to toggle defaults.</li>
+                              <li><strong>Prev/Play/Next</strong> controls scrub bound sequences.</li>
                           </ul>
                       </div>
                   </div>
@@ -1515,8 +2011,17 @@ export default function App() {
               type="file"
               ref={fileInputRef}
               className="hidden"
-              accept="*"
+              accept=".exr"
+              multiple
               onChange={handleGlobalFileInput}
+          />
+          <input
+              type="file"
+              ref={folderInputRef}
+              className="hidden"
+              accept=".exr"
+              multiple
+              onChange={handleGlobalFolderInput}
           />
         </div>
       </div>
