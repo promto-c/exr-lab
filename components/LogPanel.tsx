@@ -5,6 +5,8 @@ import { SubPanel } from './SubPanel';
 
 interface LogPanelProps {
   logs: LogEntry[];
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
 }
 
 const StatusIcon = ({ status }: { status: LogStatus }) => {
@@ -130,7 +132,7 @@ const LogItem: React.FC<{ log: LogEntry }> = ({ log }) => {
   );
 };
 
-export const LogPanel: React.FC<LogPanelProps> = ({ logs }) => {
+export const LogPanel: React.FC<LogPanelProps> = ({ logs, collapsed, onCollapsedChange }) => {
   const bottomRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -146,6 +148,8 @@ export const LogPanel: React.FC<LogPanelProps> = ({ logs }) => {
       className="h-full"
       bodyClassName="flex-1 overflow-y-auto p-4"
       stickyHeader
+      collapsed={collapsed}
+      onCollapsedChange={onCollapsedChange}
     >
       <>
         {logs.length === 0 ? (

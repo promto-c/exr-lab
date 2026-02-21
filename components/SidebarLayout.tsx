@@ -7,6 +7,8 @@ export interface SidebarPane {
   content: React.ReactNode;
   initialRatio?: number;
   minSize?: number;
+  collapsed?: boolean;
+  collapsedSize?: number;
   mobileSize?: MobilePaneSize;
   className?: string;
 }
@@ -29,6 +31,7 @@ type DragState = {
 
 const DEFAULT_MIN_PANE_SIZE = 120;
 const DEFAULT_SPLITTER_SIZE = 4;
+const DEFAULT_COLLAPSED_PANE_SIZE = 44;
 
 const cx = (...classes: Array<string | false | null | undefined>): string =>
   classes.filter(Boolean).join(' ');
@@ -61,6 +64,9 @@ const remapRatios = (
 
 const toCssLength = (value: number | string): string =>
   typeof value === 'number' ? `${value}px` : value;
+
+const getCollapsedPaneSize = (pane: SidebarPane): number =>
+  pane.collapsedSize ?? DEFAULT_COLLAPSED_PANE_SIZE;
 
 export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
   header,
@@ -99,6 +105,16 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
     setActiveSplitterIndex(null);
   }, []);
 
+  const canResizeSplitter = React.useCallback(
+    (splitterIndex: number) => {
+      const current = panes[splitterIndex];
+      const next = panes[splitterIndex + 1];
+      if (!current || !next) return false;
+      return !current.collapsed && !next.collapsed;
+    },
+    [panes]
+  );
+
   const handleSplitterPointerMove = React.useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       const dragState = dragStateRef.current;
@@ -107,6 +123,7 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
 
       const index = dragState.splitterIndex;
       if (!panes[index] || !panes[index + 1]) return;
+      if (!canResizeSplitter(index)) return;
 
       const deltaRatio = (event.clientY - dragState.startY) / dragState.availableHeight;
       const pairTotal = dragState.startRatios[index] + dragState.startRatios[index + 1];
@@ -129,19 +146,25 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
       nextRatios[index + 1] = nextNeighborRatio;
       setRatios(normalizeRatios(nextRatios));
     },
-    [panes]
+    [canResizeSplitter, panes]
   );
 
   const startResize =
     (splitterIndex: number) => (event: React.PointerEvent<HTMLDivElement>) => {
       if (isMobile || panes.length < 2) return;
+      if (!canResizeSplitter(splitterIndex)) return;
       if (event.pointerType !== 'touch' && event.button !== 0) return;
 
       const container = bodyRef.current;
       if (!container) return;
 
+      const collapsedHeight = panes.reduce((sum, pane) => {
+        if (!pane.collapsed) return sum;
+        return sum + getCollapsedPaneSize(pane);
+      }, 0);
+
       const availableHeight = Math.max(
-        container.getBoundingClientRect().height - splitterSize * (panes.length - 1),
+        container.getBoundingClientRect().height - splitterSize * (panes.length - 1) - collapsedHeight,
         1
       );
 
@@ -160,9 +183,24 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
   const desktopTemplateRows = React.useMemo(() => {
     if (panes.length === 0) return '';
     const paneRatios = ratios.length === panes.length ? ratios : buildInitialRatios(panes);
+    const expandedIndexes = panes
+      .map((pane, index) => (!pane.collapsed ? index : -1))
+      .filter((index) => index >= 0);
+    const expandedRatioSum = expandedIndexes.reduce(
+      (sum, index) => sum + Math.max(paneRatios[index] ?? 0, 0),
+      0
+    );
     const rows: string[] = [];
-    panes.forEach((_, index) => {
-      rows.push(`${Math.max(paneRatios[index], 0.0001)}fr`);
+    panes.forEach((pane, index) => {
+      if (pane.collapsed) {
+        rows.push(`${getCollapsedPaneSize(pane)}px`);
+      } else {
+        const normalizedRatio =
+          expandedRatioSum > 0
+            ? Math.max(paneRatios[index] ?? 0, 0) / expandedRatioSum
+            : 1 / Math.max(expandedIndexes.length, 1);
+        rows.push(`${Math.max(normalizedRatio, 0.0001)}fr`);
+      }
       if (index < panes.length - 1) rows.push(`${splitterSize}px`);
     });
     return rows.join(' ');
@@ -211,15 +249,20 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
                 {index < panes.length - 1 && (
                   <div
                     className={cx(
-                      'bg-neutral-950 border-y border-neutral-800/50 cursor-row-resize flex items-center justify-center transition-colors shrink-0 z-20',
-                      activeSplitterIndex === index ? 'bg-teal-500' : 'hover:bg-teal-500'
+                      'border-y border-neutral-800/50 flex items-center justify-center transition-colors shrink-0 z-20',
+                      canResizeSplitter(index)
+                        ? cx(
+                            'bg-neutral-950 cursor-row-resize',
+                            activeSplitterIndex === index ? 'bg-teal-500' : 'hover:bg-teal-500'
+                          )
+                        : 'bg-neutral-900/60 cursor-default'
                     )}
                     style={{ height: `${splitterSize}px` }}
-                    onPointerDown={startResize(index)}
-                    onPointerMove={handleSplitterPointerMove}
-                    onPointerUp={endResize}
-                    onPointerCancel={endResize}
-                    onLostPointerCapture={endResize}
+                    onPointerDown={canResizeSplitter(index) ? startResize(index) : undefined}
+                    onPointerMove={canResizeSplitter(index) ? handleSplitterPointerMove : undefined}
+                    onPointerUp={canResizeSplitter(index) ? endResize : undefined}
+                    onPointerCancel={canResizeSplitter(index) ? endResize : undefined}
+                    onLostPointerCapture={canResizeSplitter(index) ? endResize : undefined}
                   >
                     <div className="w-12 h-0.5 bg-neutral-700/50 rounded-full pointer-events-none" />
                   </div>

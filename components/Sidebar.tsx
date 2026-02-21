@@ -18,6 +18,8 @@ interface SourcesPanelProps {
   }[];
   selectedSequenceSourceId: string | null;
   onSelectSequenceSource: (sourceId: string) => void;
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
   className?: string;
 }
 
@@ -28,6 +30,8 @@ interface StructurePanelProps {
   onSelectLayer: (partId: number, layerPrefix: string) => void;
   onSelectChannel: (partId: number, channelName: string) => void;
   onOpenFile: () => void;
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
   className?: string;
 }
 
@@ -171,6 +175,8 @@ export const SourcesPanel: React.FC<SourcesPanelProps> = ({
   sequenceSources,
   selectedSequenceSourceId,
   onSelectSequenceSource,
+  collapsed,
+  onCollapsedChange,
   className,
 }) => {
   if (sequenceSources.length === 0) return null;
@@ -182,6 +188,8 @@ export const SourcesPanel: React.FC<SourcesPanelProps> = ({
       headerRight={<span className="text-[10px] text-neutral-600">{sequenceSources.length}</span>}
       className={cx('rounded-lg border border-neutral-800 overflow-hidden h-full', className)}
       bodyClassName="p-4 flex-1 min-h-0 overflow-y-auto"
+      collapsed={collapsed}
+      onCollapsedChange={onCollapsedChange}
     >
       <div className="space-y-1 overflow-y-auto pr-1">
         {sequenceSources.map((source) => {
@@ -216,6 +224,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
   onSelectLayer,
   onSelectChannel,
   onOpenFile,
+  collapsed,
+  onCollapsedChange,
   className,
 }) => {
   return (
@@ -231,6 +241,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
       }
       className={cx('rounded-lg border border-neutral-800 overflow-hidden min-h-0 flex-1', className)}
       bodyClassName="p-4 flex-1 overflow-y-auto"
+      collapsed={collapsed}
+      onCollapsedChange={onCollapsedChange}
     >
       {!structure ? (
         <div

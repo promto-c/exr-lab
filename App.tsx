@@ -10,7 +10,7 @@ import { ExrDecoder } from './services/exr/decoder';
 import { createRenderer, getRendererPreferenceFromQuery } from './services/render/createRenderer';
 import { RenderBackend, Renderer, RendererPreference, RawDecodeResult, ChannelMapping } from './services/render/types';
 import { LogEntry, ExrStructure, LogStatus, ExrChannel } from './types';
-import { Sun, Monitor, BarChart3, Maximize, Crosshair, HelpCircle, X, Menu, SlidersHorizontal } from 'lucide-react';
+import { Sun, Monitor, BarChart3, Maximize, Crosshair, HelpCircle, X, Menu, SlidersHorizontal, SkipBack, SkipForward, Play, Pause } from 'lucide-react';
 
 // Helper to guess RGB channels from a list
 const guessChannels = (channels: ExrChannel[]): ChannelMapping => {
@@ -96,10 +96,18 @@ type SequenceDescriptor = {
 type FileLoadOptions = {
   autoFit?: boolean;
   displayName?: string;
+  isFrameChange?: boolean;
 };
 
 const EXR_FILE_PATTERN = /\.exr$/i;
 const DEFAULT_SEQUENCE_FPS = 24;
+const MAX_FRAME_CACHE = 50;
+
+type FrameDecodeCache = {
+  structure: ExrStructure;
+  rawPixelData: RawDecodeResult;
+  partId: number;
+};
 
 const isExrPath = (path: string): boolean => EXR_FILE_PATTERN.test(path);
 
@@ -547,6 +555,11 @@ export default function App() {
   const [isMobile, setIsMobile] = React.useState(window.innerWidth <= 768);
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(window.innerWidth > 768);
   const [isMobileActionsOpen, setIsMobileActionsOpen] = React.useState(false);
+  const [collapsedSidebarPanels, setCollapsedSidebarPanels] = React.useState({
+    sources: false,
+    structure: false,
+    logs: false,
+  });
 
   // Refs
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -558,6 +571,11 @@ export default function App() {
   const shouldAutoFitRef = React.useRef(true);
   const sequenceSelectionEpochRef = React.useRef(0);
   const sequenceAutoFitRef = React.useRef(false);
+
+  // Frame caches: decoded result cache (avoids re-decoding navigated frames)
+  // and buffer cache (avoids re-reading from File if decode cache misses)
+  const frameCacheRef = React.useRef<Map<string, FrameDecodeCache>>(new Map());
+  const bufferCacheRef = React.useRef<Map<string, ArrayBuffer>>(new Map());
 
   // Resize Listener
   React.useEffect(() => {
@@ -591,6 +609,17 @@ export default function App() {
     sequenceFrameIndex !== null
       ? clamp(sequenceFrameIndex, 0, Math.max(sequenceFrames.length - 1, 0))
       : null;
+
+  // Frame counter label e.g. "0001 / 0024" using actual frame numbers when available
+  const currentFrameLabel = React.useMemo(() => {
+    if (safeSequenceFrameIndex === null || sequenceFrames.length === 0) return '';
+    const frame = sequenceFrames[safeSequenceFrameIndex];
+    const current = frame?.frameNumber ?? safeSequenceFrameIndex + 1;
+    const lastFrame = sequenceFrames[sequenceFrames.length - 1];
+    const total = lastFrame?.frameNumber ?? sequenceFrames.length;
+    const pad = Math.max(String(total).length, 1);
+    return `${String(current).padStart(pad, '0')} / ${String(total).padStart(pad, '0')}`;
+  }, [safeSequenceFrameIndex, sequenceFrames]);
 
   React.useEffect(() => {
     if (!canPlaySequence && isSequencePlaying) {
@@ -913,6 +942,8 @@ export default function App() {
     setSequenceFrames([]);
     setSequenceFrameIndex(null);
     setIsSequencePlaying(false);
+    frameCacheRef.current.clear();
+    bufferCacheRef.current.clear();
   };
 
   const activateSequenceSource = (source: SequenceSource, autoFit = true) => {
@@ -922,23 +953,29 @@ export default function App() {
     setSelectedSequenceSourceId(source.id);
     setSequenceFrames(source.frames);
     setSequenceFrameIndex(0);
+    // Clear per-source caches when switching sequences
+    frameCacheRef.current.clear();
+    bufferCacheRef.current.clear();
   };
 
   const handleFileLoaded = async (name: string, buffer: ArrayBuffer, options: FileLoadOptions = {}) => {
     decodeEpochRef.current += 1;
     shouldAutoFitRef.current = options.autoFit ?? true;
     const displayName = options.displayName ?? name;
+    const isFrameChange = options.isFrameChange ?? false;
 
     setFileName(displayName);
     setFileBuffer(buffer);
     setLogs([]);
-    setStructure(null);
-    setSelectedPartId(null);
+    if (!isFrameChange) {
+      setStructure(null);
+      setSelectedPartId(null);
+      setRawPixelData(null);
+      setViewMode('rgb');
+      setIsProcessing(true);
+    }
     setHistogramData(null);
-    setRawPixelData(null);
-    setViewMode('rgb');
     setInspectCursor(null);
-    setIsProcessing(true);
 
     // Close sidebar on mobile when file loaded
     if (isMobile) setIsSidebarOpen(false);
@@ -961,18 +998,20 @@ export default function App() {
         ],
       });
 
-      handleLog({
-        id: `renderer-active-${Date.now()}`,
-        stepId: 'renderer',
-        title: 'Renderer Active',
-        status: rendererBackend === 'webgl2' ? LogStatus.Ok : LogStatus.Warn,
-        ms: 0,
-        metrics: [
-          { label: 'Requested', value: rendererPreference },
-          { label: 'Active', value: rendererBackend },
-        ],
-        description: rendererFallbackReason || undefined,
-      });
+      if (!isFrameChange) {
+        handleLog({
+          id: `renderer-active-${Date.now()}`,
+          stepId: 'renderer',
+          title: 'Renderer Active',
+          status: rendererBackend === 'webgl2' ? LogStatus.Ok : LogStatus.Warn,
+          ms: 0,
+          metrics: [
+            { label: 'Requested', value: rendererPreference },
+            { label: 'Active', value: rendererBackend },
+          ],
+          description: rendererFallbackReason || undefined,
+        });
+      }
 
       const parser = new ExrParser(buffer, handleLog);
       const result = await parser.parse();
@@ -1132,11 +1171,38 @@ export default function App() {
 
     const loadSelectedFrame = async () => {
       try {
-        const buffer = await readFileAsArrayBuffer(frame.file);
-        if (requestId !== sequenceSelectionEpochRef.current) return;
+        // 1. Check full decode cache (fastest path)
+        const cached = frameCacheRef.current.get(frame.id);
+        if (cached) {
+          if (requestId !== sequenceSelectionEpochRef.current) return;
+          decodeEpochRef.current += 1;
+          // Pre-populate part cache so the decode effect short-circuits
+          partCacheRef.current.clear();
+          partCacheRef.current.set(cached.partId, cached.rawPixelData);
+          setFileName(selectedSequenceSource?.label ?? frame.relativePath);
+          setLogs([]);
+          setStructure(cached.structure);
+          setSelectedPartId(cached.partId);
+          setRawPixelData(cached.rawPixelData);
+          setHistogramData(null);
+          setIsProcessing(false);
+          return;
+        }
+
+        // 2. Check buffer cache (avoids re-reading from File)
+        let buffer = bufferCacheRef.current.get(frame.id);
+        if (!buffer) {
+          buffer = await readFileAsArrayBuffer(frame.file);
+          if (requestId !== sequenceSelectionEpochRef.current) return;
+          bufferCacheRef.current.set(frame.id, buffer);
+        } else {
+          if (requestId !== sequenceSelectionEpochRef.current) return;
+        }
+
         await handleFileLoaded(frame.name, buffer, {
           autoFit: shouldAutoFit,
           displayName: selectedSequenceSource?.label ?? frame.relativePath,
+          isFrameChange: true,
         });
       } catch (error: any) {
         if (requestId !== sequenceSelectionEpochRef.current) return;
@@ -1168,6 +1234,55 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, [canPlaySequence, isProcessing, isSequencePlaying, sequenceFrames.length]);
+
+  // Save decoded frame to decode cache while in sequence mode
+  React.useEffect(() => {
+    if (safeSequenceFrameIndex === null || !rawPixelData || !structure || selectedPartId === null) return;
+    const frame = sequenceFrames[safeSequenceFrameIndex];
+    if (!frame) return;
+    const entry: FrameDecodeCache = { structure, rawPixelData, partId: selectedPartId };
+    frameCacheRef.current.set(frame.id, entry);
+    if (frameCacheRef.current.size > MAX_FRAME_CACHE) {
+      const oldest = frameCacheRef.current.keys().next().value;
+      if (oldest !== undefined) frameCacheRef.current.delete(oldest);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawPixelData]);
+
+  // Keyboard shortcuts: ← / → step frames, Space toggles playback
+  React.useEffect(() => {
+    if (!hasSequenceFrames) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setIsSequencePlaying(false);
+        sequenceAutoFitRef.current = false;
+        setSequenceFrameIndex((prev) => {
+          const base = prev ?? 0;
+          return base === 0 ? sequenceFrames.length - 1 : base - 1;
+        });
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setIsSequencePlaying(false);
+        sequenceAutoFitRef.current = false;
+        setSequenceFrameIndex((prev) => {
+          const base = prev ?? 0;
+          return (base + 1) % sequenceFrames.length;
+        });
+      } else if (e.key === ' ') {
+        if (!canPlaySequence) return;
+        e.preventDefault();
+        setIsSequencePlaying((prev) => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [hasSequenceFrames, canPlaySequence, sequenceFrames.length]);
 
   const handleSelectPart = (partId: number) => {
     if (selectedPartId !== partId) {
@@ -1586,6 +1701,7 @@ export default function App() {
             id: 'sources',
             initialRatio: 0.2,
             minSize: 110,
+            collapsed: collapsedSidebarPanels.sources,
             mobileSize: 'auto' as const,
             content: (
               <SourcesPanel
@@ -1596,6 +1712,10 @@ export default function App() {
                 }))}
                 selectedSequenceSourceId={selectedSequenceSourceId}
                 onSelectSequenceSource={handleSelectSequenceSource}
+                collapsed={collapsedSidebarPanels.sources}
+                onCollapsedChange={(collapsed) =>
+                  setCollapsedSidebarPanels((prev) => ({ ...prev, sources: collapsed }))
+                }
               />
             ),
           },
@@ -1605,6 +1725,7 @@ export default function App() {
       id: 'structure',
       initialRatio: 0.45,
       minSize: 180,
+      collapsed: collapsedSidebarPanels.structure,
       mobileSize: 'fill' as const,
       content: (
         <StructurePanel
@@ -1614,6 +1735,10 @@ export default function App() {
           onSelectChannel={handleSelectChannel}
           selectedPartId={selectedPartId}
           onOpenFile={() => fileInputRef.current?.click()}
+          collapsed={collapsedSidebarPanels.structure}
+          onCollapsedChange={(collapsed) =>
+            setCollapsedSidebarPanels((prev) => ({ ...prev, structure: collapsed }))
+          }
         />
       ),
     },
@@ -1621,8 +1746,17 @@ export default function App() {
       id: 'logs',
       initialRatio: 0.35,
       minSize: 140,
+      collapsed: collapsedSidebarPanels.logs,
       mobileSize: '40%',
-      content: <LogPanel logs={logs} />,
+      content: (
+        <LogPanel
+          logs={logs}
+          collapsed={collapsedSidebarPanels.logs}
+          onCollapsedChange={(collapsed) =>
+            setCollapsedSidebarPanels((prev) => ({ ...prev, logs: collapsed }))
+          }
+        />
+      ),
     },
   ];
 
@@ -1701,34 +1835,7 @@ export default function App() {
                   )}
                 </div>
 
-                {hasSequenceFrames && !isMobile && (
-                  <div className="flex items-center gap-1 rounded-lg border border-neutral-700 bg-neutral-800/60 px-1.5 py-1 shrink-0">
-                    <button
-                      onClick={() => stepSequenceFrame(-1)}
-                      disabled={isProcessing}
-                      className="px-2 py-1 rounded text-[10px] font-medium text-neutral-300 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                      title="Previous Frame"
-                    >
-                      Prev
-                    </button>
-                    <button
-                      onClick={() => setIsSequencePlaying((prev) => !prev)}
-                      disabled={!canPlaySequence}
-                      className="px-2 py-1 rounded text-[10px] font-medium text-neutral-200 bg-teal-700/40 hover:bg-teal-600/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                      title={isSequencePlaying ? 'Pause Playback' : `Play Sequence (${DEFAULT_SEQUENCE_FPS} fps)`}
-                    >
-                      {isSequencePlaying ? 'Pause' : 'Play'}
-                    </button>
-                    <button
-                      onClick={() => stepSequenceFrame(1)}
-                      disabled={isProcessing}
-                      className="px-2 py-1 rounded text-[10px] font-medium text-neutral-300 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                      title="Next Frame"
-                    >
-                      Next
-                    </button>
-                  </div>
-                )}
+
 
                 {structure && !isMobile && (
                   <div className="hidden lg:flex items-center space-x-1">
@@ -1836,33 +1943,7 @@ export default function App() {
                         <Crosshair className="w-3.5 h-3.5" />
                         Inspector
                       </button>
-                      {hasSequenceFrames && (
-                        <button
-                          onClick={() => { stepSequenceFrame(-1); setIsMobileActionsOpen(false); }}
-                          className={toolbarActionItemClass(false)}
-                        >
-                          Prev Frame
-                        </button>
-                      )}
-                      {hasSequenceFrames && (
-                        <button
-                          onClick={() => {
-                            setIsSequencePlaying(prev => !prev);
-                            setIsMobileActionsOpen(false);
-                          }}
-                          className={toolbarActionItemClass(isSequencePlaying)}
-                        >
-                          {isSequencePlaying ? 'Pause Sequence' : `Play Sequence (${DEFAULT_SEQUENCE_FPS} fps)`}
-                        </button>
-                      )}
-                      {hasSequenceFrames && (
-                        <button
-                          onClick={() => { stepSequenceFrame(1); setIsMobileActionsOpen(false); }}
-                          className={toolbarActionItemClass(false)}
-                        >
-                          Next Frame
-                        </button>
-                      )}
+
                       <button
                         onClick={() => { setShowHelp(prev => !prev); setIsMobileActionsOpen(false); }}
                         className={toolbarActionItemClass(showHelp)}
@@ -1946,14 +2027,6 @@ export default function App() {
                   )}
               </>
           )}
-          
-          {/* Loading Overlay */}
-          {isProcessing && (
-              <div className="absolute inset-0 bg-neutral-950/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center pointer-events-none">
-                  <div className="w-8 h-8 border-4 border-teal-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                  <span className="text-sm font-medium text-teal-300">Processing EXR Data...</span>
-              </div>
-          )}
 
           {/* Help Overlay */}
           {showHelp && (
@@ -1989,7 +2062,7 @@ export default function App() {
                               <li><strong>A</strong> toggles RGB and Alpha view.</li>
                               <li>Use <strong>Inspector</strong> tool for pixel values.</li>
                               <li>Click <strong>Sun/Monitor</strong> icons to toggle defaults.</li>
-                              <li><strong>Prev/Play/Next</strong> controls scrub bound sequences.</li>
+                              <li><strong>← / →</strong> step frames; <strong>Space</strong> plays/pauses. Drag the scrubber to jump.</li>
                           </ul>
                       </div>
                   </div>
@@ -2004,6 +2077,67 @@ export default function App() {
           {/* Pixel Inspector Overlay */}
           {inspectData && isInspectMode && (
               <PixelInspector {...inspectData} visible={true} />
+          )}
+
+          {/* Floating Sequence Transport Bar */}
+          {hasSequenceFrames && (
+            <div
+              data-touch-ui="true"
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-2 rounded-xl border border-neutral-700/70 bg-neutral-900/85 backdrop-blur shadow-2xl"
+              style={{ width: 'min(480px, calc(100% - 2rem))' }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              onWheel={(e) => e.stopPropagation()}
+            >
+              {/* Prev */}
+              <button
+                onClick={() => stepSequenceFrame(-1)}
+                className="shrink-0 p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors"
+                title="Previous Frame  (←)"
+              >
+                <SkipBack className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Play / Pause */}
+              <button
+                onClick={() => setIsSequencePlaying((prev) => !prev)}
+                disabled={!canPlaySequence}
+                className="shrink-0 p-1.5 rounded-lg text-neutral-200 hover:text-white hover:bg-teal-700/50 disabled:opacity-40 transition-colors"
+                title={isSequencePlaying ? 'Pause  (Space)' : `Play  (Space) — ${DEFAULT_SEQUENCE_FPS} fps`}
+              >
+                {isSequencePlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+              </button>
+
+              {/* Next */}
+              <button
+                onClick={() => stepSequenceFrame(1)}
+                className="shrink-0 p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors"
+                title="Next Frame  (→)"
+              >
+                <SkipForward className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Scrubber */}
+              <PrecisionSlider
+                min={0}
+                max={Math.max(sequenceFrames.length - 1, 1)}
+                step={1}
+                value={safeSequenceFrameIndex ?? 0}
+                onChange={(value) => {
+                  setIsSequencePlaying(false);
+                  sequenceAutoFitRef.current = false;
+                  setSequenceFrameIndex(value);
+                }}
+                className="flex-1 min-w-0"
+                ariaLabel={`Frame ${(safeSequenceFrameIndex ?? 0) + 1} of ${sequenceFrames.length}`}
+                disabled={sequenceFrames.length <= 1}
+              />
+
+              {/* Frame counter */}
+              <span className="shrink-0 text-[10px] font-mono text-neutral-400 tabular-nums select-none">
+                {currentFrameLabel}
+              </span>
+            </div>
           )}
 
           {/* Hidden Input for Toolbar Button */}
