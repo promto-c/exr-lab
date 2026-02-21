@@ -180,10 +180,10 @@ export const SourcesPanel: React.FC<SourcesPanelProps> = ({
       title="Sources"
       icon={<FolderTree className="w-3 h-3" />}
       headerRight={<span className="text-[10px] text-neutral-600">{sequenceSources.length}</span>}
-      className={cx('rounded-lg border border-neutral-800 overflow-hidden', className)}
-      bodyClassName="p-4"
+      className={cx('rounded-lg border border-neutral-800 overflow-hidden h-full', className)}
+      bodyClassName="p-4 flex-1 min-h-0 overflow-y-auto"
     >
-      <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
+      <div className="space-y-1 overflow-y-auto pr-1">
         {sequenceSources.map((source) => {
           const isActive = source.id === selectedSequenceSourceId;
           return (
