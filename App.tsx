@@ -5,11 +5,13 @@ import { LogPanel } from './components/LogPanel';
 import { DropZone } from './components/DropZone';
 import { HistogramOverlay } from './components/HistogramOverlay';
 import { PixelInspector } from './components/PixelInspector';
+import { PrecisionSlider } from './components/PrecisionSlider';
+import { PreferencesView, CACHE_MB_MIN, CACHE_MB_MAX } from './components/PreferencesView';
 import { ExrParser } from './services/exrParser';
 import { ExrDecoder } from './services/exr/decoder';
 import { createRenderer, getRendererPreferenceFromQuery } from './services/render/createRenderer';
 import { RenderBackend, Renderer, RendererPreference, RawDecodeResult, ChannelMapping } from './services/render/types';
-import { LogEntry, ExrStructure, LogStatus, ExrChannel } from './types';
+import { LogEntry, ExrStructure, LogStatus, ExrChannel, CacheStats } from './types';
 import { Sun, Monitor, BarChart3, Maximize, Crosshair, HelpCircle, X, Menu, SlidersHorizontal, SkipBack, SkipForward, Play, Pause } from 'lucide-react';
 
 // Helper to guess RGB channels from a list
@@ -101,7 +103,8 @@ type FileLoadOptions = {
 
 const EXR_FILE_PATTERN = /\.exr$/i;
 const DEFAULT_SEQUENCE_FPS = 24;
-const MAX_FRAME_CACHE = 50;
+const MAX_FRAME_CACHE = 500;
+const DEFAULT_MAX_CACHE_MB = 4096;
 
 type FrameDecodeCache = {
   structure: ExrStructure;
@@ -285,32 +288,6 @@ const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> => (
   })
 );
 
-type PrecisionSliderProps = {
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (value: number) => void;
-  ariaLabel: string;
-  className?: string;
-  thresholdScale?: number;
-};
-
-type PrecisionSliderDragState = {
-  pointerId: number;
-  lastX: number;
-  currentValue: number;
-  centerY: number;
-  range: number;
-  trackWidth: number;
-  precisionThreshold: number;
-};
-
-type PrecisionSliderStyle = React.CSSProperties & {
-  '--value-pct': string;
-  '--precision-scale': string;
-};
-
 type ViewMode = 'rgb' | 'alpha';
 type WindowRect = { x: number; y: number; width: number; height: number };
 
@@ -320,176 +297,6 @@ const isTextInputLikeTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
   return Boolean(target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]'));
-};
-
-const getStepPrecision = (step: number): number => {
-  const text = String(step).toLowerCase();
-  if (!text.includes('e-')) {
-    const dot = text.indexOf('.');
-    return dot >= 0 ? text.length - dot - 1 : 0;
-  }
-
-  const [base, exponentText] = text.split('e-');
-  const exponent = Number.parseInt(exponentText ?? '0', 10);
-  const dot = base.indexOf('.');
-  const basePrecision = dot >= 0 ? base.length - dot - 1 : 0;
-  return basePrecision + exponent;
-};
-
-const snapToStep = (value: number, min: number, step: number): number => {
-  if (!Number.isFinite(step) || step <= 0) return value;
-  const precision = getStepPrecision(step);
-  const snapped = min + Math.round((value - min) / step) * step;
-  return Number(snapped.toFixed(precision));
-};
-
-const valueToPercent = (value: number, min: number, max: number): number => {
-  if (max <= min) return 0;
-  return ((clamp(value, min, max) - min) / (max - min)) * 100;
-};
-
-const pointerToValue = (
-  clientX: number,
-  rect: DOMRect,
-  min: number,
-  max: number,
-  step: number
-): number => {
-  if (max <= min) return min;
-  const ratio = clamp((clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
-  const raw = min + ratio * (max - min);
-  return snapToStep(raw, min, step);
-};
-
-const PrecisionSlider = ({
-  value,
-  min,
-  max,
-  step,
-  onChange,
-  ariaLabel,
-  className = '',
-  thresholdScale = 1,
-}: PrecisionSliderProps) => {
-  const sliderRef = React.useRef<HTMLDivElement>(null);
-  const dragRef = React.useRef<PrecisionSliderDragState | null>(null);
-  const [precisionScale, setPrecisionScale] = React.useState(1);
-
-  const valuePct = React.useMemo(() => valueToPercent(value, min, max), [value, min, max]);
-
-  const commitValue = React.useCallback((next: number): number => {
-    const snapped = snapToStep(next, min, step);
-    const clamped = clamp(snapped, min, max);
-    onChange(clamped);
-    return clamped;
-  }, [max, min, onChange, step]);
-
-  const releaseDrag = React.useCallback(() => {
-    dragRef.current = null;
-    setPrecisionScale(1);
-  }, []);
-
-  const handlePointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.pointerType !== 'touch' && event.button !== 0) return;
-
-    const slider = sliderRef.current;
-    if (!slider) return;
-
-    const rect = slider.getBoundingClientRect();
-    const initialValue = pointerToValue(event.clientX, rect, min, max, step);
-    const committedValue = commitValue(initialValue);
-
-    dragRef.current = {
-      pointerId: event.pointerId,
-      lastX: event.clientX,
-      currentValue: committedValue,
-      centerY: rect.top + rect.height / 2,
-      range: max - min,
-      trackWidth: Math.max(rect.width, 1),
-      precisionThreshold: Math.max(rect.height * thresholdScale, 1),
-    };
-
-    setPrecisionScale(1);
-    event.currentTarget.setPointerCapture(event.pointerId);
-    event.preventDefault();
-  }, [commitValue, max, min, step, thresholdScale]);
-
-  const handlePointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-
-    const perpendicularDistance = Math.abs(event.clientY - drag.centerY);
-    const distanceScale =
-      perpendicularDistance <= drag.precisionThreshold
-        ? 1
-        : drag.precisionThreshold / perpendicularDistance;
-
-    setPrecisionScale(distanceScale);
-
-    const horizontalDelta = event.clientX - drag.lastX;
-    if (horizontalDelta === 0) return;
-
-    const scaledDelta = (horizontalDelta / drag.trackWidth) * drag.range * distanceScale;
-    const committedValue = commitValue(drag.currentValue + scaledDelta);
-
-    drag.currentValue = committedValue;
-    drag.lastX = event.clientX;
-  }, [commitValue]);
-
-  const handlePointerUp = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    releaseDrag();
-  }, [releaseDrag]);
-
-  const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    let nextValue: number | null = null;
-
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') nextValue = value - step;
-    if (event.key === 'ArrowRight' || event.key === 'ArrowUp') nextValue = value + step;
-    if (event.key === 'PageDown') nextValue = value - step * 10;
-    if (event.key === 'PageUp') nextValue = value + step * 10;
-    if (event.key === 'Home') nextValue = min;
-    if (event.key === 'End') nextValue = max;
-
-    if (nextValue === null) return;
-
-    event.preventDefault();
-    commitValue(nextValue);
-  }, [commitValue, max, min, step, value]);
-
-  const style: PrecisionSliderStyle = {
-    '--value-pct': `${valuePct}%`,
-    '--precision-scale': `${precisionScale}`,
-  };
-
-  return (
-    <div
-      ref={sliderRef}
-      className={`tone-slider ${className}`.trim()}
-      style={style}
-      role="slider"
-      tabIndex={0}
-      aria-label={ariaLabel}
-      aria-valuemin={min}
-      aria-valuemax={max}
-      aria-valuenow={value}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
-      onLostPointerCapture={releaseDrag}
-      onKeyDown={handleKeyDown}
-    >
-      <div className="tone-slider__track" aria-hidden="true" />
-      <div className="tone-slider__fill" aria-hidden="true" />
-      <div className="tone-slider__handle" aria-hidden="true" />
-    </div>
-  );
 };
 
 export default function App() {
@@ -531,6 +338,20 @@ export default function App() {
   const [rendererBackend, setRendererBackend] = React.useState<RenderBackend>('cpu');
   const [rendererFallbackReason, setRendererFallbackReason] = React.useState<string | null>(null);
   const [rendererEpoch, setRendererEpoch] = React.useState(0);
+  const [isPreferencesOpen, setIsPreferencesOpen] = React.useState(false);
+  const [maxCacheMB, setMaxCacheMB] = React.useState(DEFAULT_MAX_CACHE_MB);
+  const [cacheStats, setCacheStats] = React.useState<CacheStats>({
+    cacheBytes: 0,
+    uniqueCacheBytes: 0,
+    rawBytes: 0,
+    totalUniqueBytes: 0,
+    partCacheBytes: 0,
+    frameCacheBytes: 0,
+    bufferCacheBytes: 0,
+    partCacheCount: 0,
+    frameCacheCount: 0,
+    bufferCacheCount: 0,
+  });
 
   // Pixel Inspector State
   const [isInspectMode, setIsInspectMode] = React.useState(true);
@@ -543,6 +364,7 @@ export default function App() {
 
   // Touch State
   const lastTouchRef = React.useRef<{x: number, y: number}[] | null>(null);
+  const isTouchUiInteractionRef = React.useRef(false);
 
   // Help State
   const [showHelp, setShowHelp] = React.useState(false);
@@ -555,11 +377,6 @@ export default function App() {
   const [isMobile, setIsMobile] = React.useState(window.innerWidth <= 768);
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(window.innerWidth > 768);
   const [isMobileActionsOpen, setIsMobileActionsOpen] = React.useState(false);
-  const [collapsedSidebarPanels, setCollapsedSidebarPanels] = React.useState({
-    sources: false,
-    structure: false,
-    logs: false,
-  });
 
   // Refs
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -577,6 +394,137 @@ export default function App() {
   const frameCacheRef = React.useRef<Map<string, FrameDecodeCache>>(new Map());
   const bufferCacheRef = React.useRef<Map<string, ArrayBuffer>>(new Map());
 
+  const formatBytes = React.useCallback((bytes: number): string => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const base = 1024;
+    const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(base)), units.length - 1);
+    const value = bytes / Math.pow(base, exponent);
+    const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+    return `${value.toFixed(precision)} ${units[exponent]}`;
+  }, []);
+
+  const estimateRawBytes = React.useCallback((raw: RawDecodeResult): number => {
+    let bytes = 0;
+    for (const channel of Object.values(raw.channels)) {
+      bytes += channel.byteLength;
+    }
+    return bytes;
+  }, []);
+
+  const collectRawBuffers = React.useCallback(
+    (raw: RawDecodeResult, buffers: Set<ArrayBufferLike>): number => {
+      let bytes = 0;
+      for (const channel of Object.values(raw.channels)) {
+        const buffer = channel.buffer;
+        if (!buffers.has(buffer)) {
+          buffers.add(buffer);
+          bytes += buffer.byteLength;
+        }
+      }
+      return bytes;
+    },
+    []
+  );
+
+  const computeCacheStats = React.useCallback((): CacheStats => {
+    const buffers = new Set<ArrayBufferLike>();
+    const rawBytes = rawPixelData ? collectRawBuffers(rawPixelData, buffers) : 0;
+    let partCacheBytes = 0;
+    let frameCacheBytes = 0;
+    let bufferCacheBytes = 0;
+    let uniqueCacheBytes = 0;
+
+    partCacheRef.current.forEach((raw) => {
+      partCacheBytes += estimateRawBytes(raw);
+      uniqueCacheBytes += collectRawBuffers(raw, buffers);
+    });
+
+    frameCacheRef.current.forEach((entry) => {
+      frameCacheBytes += estimateRawBytes(entry.rawPixelData);
+      uniqueCacheBytes += collectRawBuffers(entry.rawPixelData, buffers);
+    });
+
+    bufferCacheRef.current.forEach((buffer) => {
+      bufferCacheBytes += buffer.byteLength;
+      if (!buffers.has(buffer)) {
+        buffers.add(buffer);
+        uniqueCacheBytes += buffer.byteLength;
+      }
+    });
+
+    return {
+      cacheBytes: partCacheBytes + frameCacheBytes + bufferCacheBytes,
+      uniqueCacheBytes,
+      rawBytes,
+      totalUniqueBytes: rawBytes + uniqueCacheBytes,
+      partCacheBytes,
+      frameCacheBytes,
+      bufferCacheBytes,
+      partCacheCount: partCacheRef.current.size,
+      frameCacheCount: frameCacheRef.current.size,
+      bufferCacheCount: bufferCacheRef.current.size,
+    };
+  }, [collectRawBuffers, estimateRawBytes, rawPixelData]);
+
+  const updateCacheStats = React.useCallback(() => {
+    setCacheStats(computeCacheStats());
+  }, [computeCacheStats]);
+
+  const pruneCachesToLimit = React.useCallback(() => {
+    const maxBytes = clamp(maxCacheMB, CACHE_MB_MIN, CACHE_MB_MAX) * 1024 * 1024;
+    let total = 0;
+    partCacheRef.current.forEach((raw) => {
+      total += estimateRawBytes(raw);
+    });
+    frameCacheRef.current.forEach((entry) => {
+      total += estimateRawBytes(entry.rawPixelData);
+    });
+    bufferCacheRef.current.forEach((buffer) => {
+      total += buffer.byteLength;
+    });
+
+    let purged = false;
+    while (total > maxBytes) {
+      if (bufferCacheRef.current.size > 0) {
+        const key = bufferCacheRef.current.keys().next().value;
+        const entry = bufferCacheRef.current.get(key);
+        if (entry) total -= entry.byteLength;
+        bufferCacheRef.current.delete(key);
+        purged = true;
+        continue;
+      }
+      if (frameCacheRef.current.size > 0) {
+        const key = frameCacheRef.current.keys().next().value;
+        const entry = frameCacheRef.current.get(key);
+        if (entry) total -= estimateRawBytes(entry.rawPixelData);
+        frameCacheRef.current.delete(key);
+        purged = true;
+        continue;
+      }
+      if (partCacheRef.current.size > 0) {
+        const key = partCacheRef.current.keys().next().value;
+        const entry = partCacheRef.current.get(key);
+        if (entry) total -= estimateRawBytes(entry);
+        partCacheRef.current.delete(key);
+        purged = true;
+        continue;
+      }
+      break;
+    }
+
+    if (purged) {
+      updateCacheStats();
+    }
+  }, [estimateRawBytes, maxCacheMB, updateCacheStats]);
+
+  const purgeCaches = React.useCallback(() => {
+    partCacheRef.current.clear();
+    frameCacheRef.current.clear();
+    bufferCacheRef.current.clear();
+    updateCacheStats();
+  }, [updateCacheStats]);
+
   // Resize Listener
   React.useEffect(() => {
       const handleResize = () => {
@@ -590,6 +538,22 @@ export default function App() {
       window.addEventListener('resize', handleResize);
       return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  React.useEffect(() => {
+    updateCacheStats();
+  }, [rawPixelData, updateCacheStats]);
+
+  React.useEffect(() => {
+    pruneCachesToLimit();
+    updateCacheStats();
+  }, [maxCacheMB, pruneCachesToLimit, updateCacheStats]);
+
+  React.useEffect(() => {
+    const interval = window.setInterval(() => {
+      updateCacheStats();
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [updateCacheStats]);
 
   React.useEffect(() => {
     const input = folderInputRef.current;
@@ -735,7 +699,7 @@ export default function App() {
           : null;
     if (!element) return false;
     return Boolean(
-      element.closest('button, input, select, textarea, a, label, [role="button"], [data-touch-ui="true"]')
+      element.closest('button, input, select, textarea, a, label, [role="button"], [role="slider"], [data-touch-ui="true"]')
     );
   }, []);
 
@@ -768,8 +732,18 @@ export default function App() {
     if (!el) return;
     
     const preventDefault = (e: TouchEvent) => {
-      if (isViewportUiTarget(e.target)) return;
+      if (e.type === 'touchstart') {
+        isTouchUiInteractionRef.current = isViewportUiTarget(e.target);
+      }
+
+      if (isTouchUiInteractionRef.current || isViewportUiTarget(e.target)) return;
       e.preventDefault();
+    };
+
+    const clearTouchUiInteraction = (e: TouchEvent) => {
+      if (e.touches.length === 0) {
+        isTouchUiInteractionRef.current = false;
+      }
     };
     el.addEventListener('touchstart', preventDefault, { passive: false });
     el.addEventListener('touchmove', preventDefault, { passive: false });
@@ -944,6 +918,7 @@ export default function App() {
     setIsSequencePlaying(false);
     frameCacheRef.current.clear();
     bufferCacheRef.current.clear();
+    updateCacheStats();
   };
 
   const activateSequenceSource = (source: SequenceSource, autoFit = true) => {
@@ -956,6 +931,7 @@ export default function App() {
     // Clear per-source caches when switching sequences
     frameCacheRef.current.clear();
     bufferCacheRef.current.clear();
+    updateCacheStats();
   };
 
   const handleFileLoaded = async (name: string, buffer: ArrayBuffer, options: FileLoadOptions = {}) => {
@@ -974,7 +950,13 @@ export default function App() {
       setViewMode('rgb');
       setIsProcessing(true);
     }
-    setHistogramData(null);
+    // When loading a new file we clear the histogram, but for frame changes
+    // we want to keep the previous data in place until the new render completes
+    // so that the overlay doesn't unmount/flash. It will be replaced a few
+    // milliseconds later by the render effect below.
+    if (!isFrameChange) {
+      setHistogramData(null);
+    }
     setInspectCursor(null);
 
     // Close sidebar on mobile when file loaded
@@ -982,6 +964,7 @@ export default function App() {
 
     // Clear the part cache when loading a new file
     partCacheRef.current.clear();
+    updateCacheStats();
 
     try {
       const fileSizeMB = (buffer.byteLength / 1024 / 1024).toFixed(2);
@@ -1184,7 +1167,6 @@ export default function App() {
           setStructure(cached.structure);
           setSelectedPartId(cached.partId);
           setRawPixelData(cached.rawPixelData);
-          setHistogramData(null);
           setIsProcessing(false);
           return;
         }
@@ -1195,6 +1177,8 @@ export default function App() {
           buffer = await readFileAsArrayBuffer(frame.file);
           if (requestId !== sequenceSelectionEpochRef.current) return;
           bufferCacheRef.current.set(frame.id, buffer);
+          pruneCachesToLimit();
+          updateCacheStats();
         } else {
           if (requestId !== sequenceSelectionEpochRef.current) return;
         }
@@ -1246,6 +1230,8 @@ export default function App() {
       const oldest = frameCacheRef.current.keys().next().value;
       if (oldest !== undefined) frameCacheRef.current.delete(oldest);
     }
+    pruneCachesToLimit();
+    updateCacheStats();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawPixelData]);
 
@@ -1288,7 +1274,8 @@ export default function App() {
     if (selectedPartId !== partId) {
       const cachedRaw = partCacheRef.current.get(partId) ?? null;
       setRawPixelData(cachedRaw);
-      setHistogramData(null);
+      // don't clear histogram here – keep the old bars visible until the new
+      // render effect replaces them, which avoids a flash when switching parts
       setInspectCursor(null);
       setSelectedPartId(partId);
     }
@@ -1330,6 +1317,8 @@ export default function App() {
                   // Save to cache
                   partCacheRef.current.set(selectedPartId, rawResult);
                   setRawPixelData(rawResult);
+                  pruneCachesToLimit();
+                  updateCacheStats();
               }
           } finally {
               if (requestEpoch === decodeEpochRef.current) {
@@ -1388,7 +1377,7 @@ export default function App() {
       if (selectedPartId !== partId) {
           const cachedRaw = partCacheRef.current.get(partId) ?? null;
           setRawPixelData(cachedRaw);
-          setHistogramData(null);
+          // do not clear histogram here for the same reason as handleSelectPart
           setInspectCursor(null);
           setSelectedPartId(partId);
       }
@@ -1406,7 +1395,7 @@ export default function App() {
       if (selectedPartId !== partId) {
           const cachedRaw = partCacheRef.current.get(partId) ?? null;
           setRawPixelData(cachedRaw);
-          setHistogramData(null);
+          // keep old histogram until new one arrives
           setInspectCursor(null);
           setSelectedPartId(partId);
       }
@@ -1608,6 +1597,11 @@ export default function App() {
       lastTouchRef.current = null;
   };
 
+  const handleCacheLimitChange = (value: number) => {
+    const next = clamp(Math.round(value), CACHE_MB_MIN, CACHE_MB_MAX);
+    setMaxCacheMB(next);
+  };
+
   // Compute inspector values for rendering
   const getInspectData = () => {
       if (!inspectCursor || !rawPixelData) return null;
@@ -1633,6 +1627,12 @@ export default function App() {
   };
 
   const inspectData = getInspectData();
+
+  const maxCacheBytes = clamp(maxCacheMB, CACHE_MB_MIN, CACHE_MB_MAX) * 1024 * 1024;
+  const cacheUsagePercent = maxCacheBytes > 0
+    ? Math.min(cacheStats.uniqueCacheBytes / maxCacheBytes, 1)
+    : 0;
+  const cacheExceeded = cacheStats.uniqueCacheBytes > maxCacheBytes;
 
   const toolbarToggleButtonClass = (isActive: boolean): string =>
     `toolbar-toggle-button p-1.5 rounded transition-colors ${isActive ? 'toolbar-toggle-button--active' : ''}`;
@@ -1701,8 +1701,6 @@ export default function App() {
             id: 'sources',
             initialRatio: 0.2,
             minSize: 110,
-            collapsed: collapsedSidebarPanels.sources,
-            mobileSize: 'auto' as const,
             content: (
               <SourcesPanel
                 sequenceSources={sequenceSources.map((source) => ({
@@ -1712,10 +1710,6 @@ export default function App() {
                 }))}
                 selectedSequenceSourceId={selectedSequenceSourceId}
                 onSelectSequenceSource={handleSelectSequenceSource}
-                collapsed={collapsedSidebarPanels.sources}
-                onCollapsedChange={(collapsed) =>
-                  setCollapsedSidebarPanels((prev) => ({ ...prev, sources: collapsed }))
-                }
               />
             ),
           },
@@ -1725,8 +1719,6 @@ export default function App() {
       id: 'structure',
       initialRatio: 0.45,
       minSize: 180,
-      collapsed: collapsedSidebarPanels.structure,
-      mobileSize: 'fill' as const,
       content: (
         <StructurePanel
           structure={structure}
@@ -1735,10 +1727,6 @@ export default function App() {
           onSelectChannel={handleSelectChannel}
           selectedPartId={selectedPartId}
           onOpenFile={() => fileInputRef.current?.click()}
-          collapsed={collapsedSidebarPanels.structure}
-          onCollapsedChange={(collapsed) =>
-            setCollapsedSidebarPanels((prev) => ({ ...prev, structure: collapsed }))
-          }
         />
       ),
     },
@@ -1746,17 +1734,7 @@ export default function App() {
       id: 'logs',
       initialRatio: 0.35,
       minSize: 140,
-      collapsed: collapsedSidebarPanels.logs,
-      mobileSize: '40%',
-      content: (
-        <LogPanel
-          logs={logs}
-          collapsed={collapsedSidebarPanels.logs}
-          onCollapsedChange={(collapsed) =>
-            setCollapsedSidebarPanels((prev) => ({ ...prev, logs: collapsed }))
-          }
-        />
-      ),
+      content: <LogPanel logs={logs} />,
     },
   ];
 
@@ -1863,7 +1841,7 @@ export default function App() {
             )}
             
             {/* Right Group: Actions + Mobile Tone Controls */}
-            <div className={`flex items-center min-w-0 ${isMobile ? 'flex-1 justify-end ml-2' : 'ml-auto shrink-0'}`}>
+            <div className={`flex items-center shrink-0 ${isMobile ? 'justify-end ml-2' : 'ml-auto'}`}>
               {isMobile && toneControls}
               {isMobile && <div className="h-6 w-px bg-neutral-800 mx-2 shrink-0"></div>}
               
@@ -1900,6 +1878,14 @@ export default function App() {
                   >
                       <HelpCircle className="w-4 h-4" />
                   </button>
+
+                    <button
+                      onClick={() => setIsPreferencesOpen(true)}
+                      className={toolbarToggleButtonClass(isPreferencesOpen)}
+                      title="Preferences"
+                    >
+                      <SlidersHorizontal className="w-4 h-4" />
+                    </button>
                 </div>
               )}
 
@@ -1950,6 +1936,14 @@ export default function App() {
                       >
                         <HelpCircle className="w-3.5 h-3.5" />
                         Help
+                      </button>
+
+                      <button
+                        onClick={() => { setIsPreferencesOpen(true); setIsMobileActionsOpen(false); }}
+                        className={toolbarActionItemClass(isPreferencesOpen)}
+                      >
+                        <SlidersHorizontal className="w-3.5 h-3.5" />
+                        Preferences
                       </button>
                     </div>
                   )}
@@ -2069,6 +2063,21 @@ export default function App() {
               </div>
           )}
 
+          {isPreferencesOpen && (
+            <PreferencesView
+              isOpen={isPreferencesOpen}
+              onClose={() => setIsPreferencesOpen(false)}
+              cacheStats={cacheStats}
+              maxCacheMB={maxCacheMB}
+              maxCacheBytes={maxCacheBytes}
+              cacheUsagePercent={cacheUsagePercent}
+              cacheExceeded={cacheExceeded}
+              onCacheLimitChange={handleCacheLimitChange}
+              onPurgeCaches={purgeCaches}
+              formatBytes={formatBytes}
+            />
+          )}
+
           {/* Histogram Overlay */}
           {structure && showHistogram && histogramData && (
               <HistogramOverlay data={histogramData} onClose={() => setShowHistogram(false)} />
@@ -2087,6 +2096,18 @@ export default function App() {
               style={{ width: 'min(480px, calc(100% - 2rem))' }}
               onMouseDown={(e) => e.stopPropagation()}
               onTouchStart={(e) => e.stopPropagation()}
+          )}
+
+          {/* Floating Sequence Transport Bar */}
+          {hasSequenceFrames && (
+            <div
+              data-touch-ui="true"
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-2 rounded-xl border border-neutral-700/70 bg-neutral-900/85 backdrop-blur shadow-2xl"
+              style={{ width: 'min(480px, calc(100% - 2rem))' }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              onTouchMove={(e) => e.stopPropagation()}
+              onTouchEnd={(e) => e.stopPropagation()}
               onWheel={(e) => e.stopPropagation()}
             >
               {/* Prev */}
@@ -2130,7 +2151,6 @@ export default function App() {
                 }}
                 className="flex-1 min-w-0"
                 ariaLabel={`Frame ${(safeSequenceFrameIndex ?? 0) + 1} of ${sequenceFrames.length}`}
-                disabled={sequenceFrames.length <= 1}
               />
 
               {/* Frame counter */}

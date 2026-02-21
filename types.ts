@@ -31,3 +31,16 @@ export type { ExrChannel, ExrPart, ExrStructure, ExrWindow };
 export interface DecodingOptions {
   partId: number;
 }
+
+export interface CacheStats {
+  cacheBytes: number;
+  uniqueCacheBytes: number;
+  rawBytes: number;
+  totalUniqueBytes: number;
+  partCacheBytes: number;
+  frameCacheBytes: number;
+  bufferCacheBytes: number;
+  partCacheCount: number;
+  frameCacheCount: number;
+  bufferCacheCount: number;
+}

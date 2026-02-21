@@ -29,7 +29,9 @@ export const HistogramOverlay: React.FC<HistogramOverlayProps> = ({ data, onClos
          {data.map((val, i) => (
              <div 
                key={i} 
-               className="flex-1 bg-teal-500/80 hover:bg-teal-400 transition-colors"
+               // add smooth height transitions so values update without a hard
+               // jump; also transition color for hover as before
+               className="flex-1 bg-teal-500/80 hover:bg-teal-400 transition-all duration-200 ease-out"
                style={{ height: `${(val / max) * 100}%` }}
                title={`Bin ${i}: ${val}`}
              />
