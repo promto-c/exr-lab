@@ -35,6 +35,7 @@ interface StructurePanelProps {
   className?: string;
 }
 
+// individual part in the structure panel
 const PartItem: React.FC<{ 
   part: ExrPart; 
   isSelected: boolean; 
@@ -171,6 +172,37 @@ export const SidebarHeader: React.FC<SidebarHeaderProps> = ({
   );
 };
 
+// simplified list item for a source entry – uses same visual language as PartItem
+const SourceItem: React.FC<{
+  source: {id: string; label: string; frameCount: number};
+  isSelected: boolean;
+  onClick: () => void;
+}> = ({ source, isSelected, onClick }) => (
+  <div
+    className={`mb-1 rounded-lg border transition-all duration-200 overflow-hidden ${
+      isSelected
+        ? 'bg-neutral-800/80 border-teal-500/50 shadow-[0_0_15px_-3px_rgba(20,184,166,0.3)]'
+        : 'bg-neutral-800/30 border-neutral-800 hover:border-neutral-700'
+    }`}
+  >
+    <div
+      className="px-4 py-1 flex flex-col cursor-pointer hover:bg-neutral-700/50 transition-colors"
+      onClick={onClick}
+    >
+      <span
+        className={`text-sm font-medium truncate ${
+          isSelected ? 'text-teal-200' : 'text-neutral-300'
+        }`}
+      >
+        {source.label}
+      </span>
+      <span className={`text-[10px] ${isSelected ? 'text-teal-300/80' : 'text-neutral-500'}`}>
+        {source.frameCount} frame{source.frameCount !== 1 ? 's' : ''}
+      </span>
+    </div>
+  </div>
+);
+
 export const SourcesPanel: React.FC<SourcesPanelProps> = ({
   sequenceSources,
   selectedSequenceSourceId,
@@ -187,7 +219,7 @@ export const SourcesPanel: React.FC<SourcesPanelProps> = ({
       icon={<FolderTree className="w-3 h-3" />}
       headerRight={<span className="text-[10px] text-neutral-600">{sequenceSources.length}</span>}
       className={cx('rounded-lg border border-neutral-800 overflow-hidden h-full', className)}
-      bodyClassName="p-4 flex-1 min-h-0 overflow-y-auto"
+      bodyClassName="p-1 flex-1 min-h-0 overflow-y-auto"
       collapsed={collapsed}
       onCollapsedChange={onCollapsedChange}
     >
@@ -195,21 +227,12 @@ export const SourcesPanel: React.FC<SourcesPanelProps> = ({
         {sequenceSources.map((source) => {
           const isActive = source.id === selectedSequenceSourceId;
           return (
-            <button
+            <SourceItem
               key={source.id}
+              source={source}
+              isSelected={isActive}
               onClick={() => onSelectSequenceSource(source.id)}
-              className={`w-full rounded-md border px-2 py-1.5 text-left transition-colors ${
-                isActive
-                  ? 'border-teal-500/40 bg-teal-900/20 text-teal-200'
-                  : 'border-neutral-800 bg-neutral-900/40 text-neutral-300 hover:border-neutral-700 hover:bg-neutral-800/60'
-              }`}
-              title={source.label}
-            >
-              <div className="text-[11px] truncate font-medium">{source.label}</div>
-              <div className={`text-[10px] ${isActive ? 'text-teal-300/80' : 'text-neutral-500'}`}>
-                {source.frameCount} frame{source.frameCount !== 1 ? 's' : ''}
-              </div>
-            </button>
+            />
           );
         })}
       </div>

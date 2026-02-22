@@ -1,7 +1,5 @@
 import React from 'react';
 
-type MobilePaneSize = 'auto' | 'fill' | number | string;
-
 export interface SidebarPane {
   id: string;
   /** element to render inside the pane. When a valid React element is provided the layout
@@ -73,7 +71,7 @@ type DragState = {
 
 const DEFAULT_MIN_PANE_SIZE = 120;
 const DEFAULT_SPLITTER_SIZE = 4;
-const DEFAULT_COLLAPSED_PANE_SIZE = 44;
+const DEFAULT_COLLAPSED_PANE_SIZE = 32;
 
 const cx = (...classes: Array<string | false | null | undefined>): string =>
   classes.filter(Boolean).join(' ');

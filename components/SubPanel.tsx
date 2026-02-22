@@ -50,7 +50,7 @@ export const SubPanel: React.FC<SubPanelProps> = ({
     <div className={cx('flex flex-col bg-neutral-900', className)}>
       <div
         className={cx(
-          'p-3 border-b border-neutral-800 bg-neutral-900',
+          'p-2 border-b border-neutral-800 bg-neutral-900',
           stickyHeader && 'sticky top-0 z-10',
           collapsible && 'cursor-pointer select-none hover:bg-neutral-800/60 transition-colors',
           headerClassName
