@@ -15,6 +15,10 @@ interface PreferencesViewProps {
   cacheUsagePercent: number;
   cacheExceeded: boolean;
   onCacheLimitChange: (value: number) => void;
+  onCachePolicyChange: (policy: 'oldest' | 'distance') => void;
+  cachePolicy: 'oldest' | 'distance';
+  cacheDistance: number;
+  onCacheDistanceChange: (value: number) => void;
   onPurgeCaches: () => void;
   formatBytes: (bytes: number) => string;
 }
@@ -28,6 +32,10 @@ export const PreferencesView: React.FC<PreferencesViewProps> = ({
   cacheUsagePercent,
   cacheExceeded,
   onCacheLimitChange,
+  onCachePolicyChange,
+  cachePolicy,
+  cacheDistance,
+  onCacheDistanceChange,
   onPurgeCaches,
   formatBytes,
 }) => {
@@ -139,11 +147,54 @@ export const PreferencesView: React.FC<PreferencesViewProps> = ({
             </div>
           </div>
 
-          <div className="border-t border-neutral-800 pt-3 text-xs text-neutral-500">
-            <div className="flex flex-wrap items-center gap-3">
-              <span>Part cache: {formatBytes(cacheStats.partCacheBytes)} · {cacheStats.partCacheCount}</span>
-              <span>Frame cache: {formatBytes(cacheStats.frameCacheBytes)} · {cacheStats.frameCacheCount}</span>
-              <span>Buffer cache: {formatBytes(cacheStats.bufferCacheBytes)} · {cacheStats.bufferCacheCount}</span>
+          <div className="space-y-4">
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-neutral-500">Eviction policy</p>
+              <div className="mt-1 text-xs">
+                {/* segmented control for cache policy */}
+                <div className="inline-flex rounded-md border border-neutral-800 overflow-hidden">
+                  <button
+                    type="button"
+                    className={`px-3 py-1 transition-colors ${
+                      cachePolicy === 'oldest'
+                        ? 'bg-neutral-800 text-neutral-100'
+                        : 'text-neutral-400 hover:bg-neutral-800'
+                    }`}
+                    onClick={() => onCachePolicyChange('oldest')}
+                  >
+                    Oldest frames first
+                  </button>
+                  <button
+                    type="button"
+                    className={`px-3 py-1 transition-colors flex items-center gap-1 ${
+                      cachePolicy === 'distance'
+                        ? 'bg-neutral-800 text-neutral-100'
+                        : 'text-neutral-400 hover:bg-neutral-800'
+                    }`}
+                    onClick={() => onCachePolicyChange('distance')}
+                  >
+                    <span>Drop frames farther than</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={cacheDistance}
+                      onChange={(e) => onCacheDistanceChange(Number(e.target.value))}
+                      disabled={cachePolicy !== 'distance'}
+                      className="w-16 rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs text-neutral-100"
+                    />
+                    <span>frames</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="border-t border-neutral-800 pt-3 text-xs text-neutral-500">
+              <div className="flex flex-wrap items-center gap-3">
+                <span>Part cache: {formatBytes(cacheStats.partCacheBytes)} · {cacheStats.partCacheCount}</span>
+                <span>Frame cache: {formatBytes(cacheStats.frameCacheBytes)} · {cacheStats.frameCacheCount}</span>
+                <span>Buffer cache: {formatBytes(cacheStats.bufferCacheBytes)} · {cacheStats.bufferCacheCount}</span>
+              </div>
             </div>
           </div>
         </div>

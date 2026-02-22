@@ -9,6 +9,7 @@ import { PrecisionSlider } from './components/PrecisionSlider';
 import { PreferencesView, CACHE_MB_MIN, CACHE_MB_MAX } from './components/PreferencesView';
 import { ExrParser } from './services/exrParser';
 import { ExrDecoder } from './services/exr/decoder';
+import { ExrCache } from './core/cache';
 import { createRenderer, getRendererPreferenceFromQuery } from './services/render/createRenderer';
 import { RenderBackend, Renderer, RendererPreference, RawDecodeResult, ChannelMapping } from './services/render/types';
 import { LogEntry, ExrStructure, LogStatus, ExrChannel, CacheStats } from './types';
@@ -105,12 +106,6 @@ const EXR_FILE_PATTERN = /\.exr$/i;
 const DEFAULT_SEQUENCE_FPS = 24;
 const MAX_FRAME_CACHE = 500;
 const DEFAULT_MAX_CACHE_MB = 4096;
-
-type FrameDecodeCache = {
-  structure: ExrStructure;
-  rawPixelData: RawDecodeResult;
-  partId: number;
-};
 
 const isExrPath = (path: string): boolean => EXR_FILE_PATTERN.test(path);
 
@@ -317,8 +312,8 @@ export default function App() {
   // Raw Data Cache (Map of Float32Arrays)
   const [rawPixelData, setRawPixelData] = React.useState<RawDecodeResult | null>(null);
   
-  // Decoded Part Cache
-  const partCacheRef = React.useRef<Map<number, RawDecodeResult>>(new Map());
+  // Unified Cache Manager
+  const exrCacheRef = React.useRef<ExrCache>(new ExrCache());
 
   // Channel Mapping State
   const [channelMapping, setChannelMapping] = React.useState<ChannelMapping>({ r: '', g: '', b: '', a: '' });
@@ -340,6 +335,8 @@ export default function App() {
   const [rendererEpoch, setRendererEpoch] = React.useState(0);
   const [isPreferencesOpen, setIsPreferencesOpen] = React.useState(false);
   const [maxCacheMB, setMaxCacheMB] = React.useState(DEFAULT_MAX_CACHE_MB);
+  const [cachePolicy, setCachePolicy] = React.useState<'oldest' | 'distance'>('oldest');
+  const [cacheDistance, setCacheDistance] = React.useState(64);
   const [cacheStats, setCacheStats] = React.useState<CacheStats>({
     cacheBytes: 0,
     uniqueCacheBytes: 0,
@@ -389,11 +386,6 @@ export default function App() {
   const sequenceSelectionEpochRef = React.useRef(0);
   const sequenceAutoFitRef = React.useRef(false);
 
-  // Frame caches: decoded result cache (avoids re-decoding navigated frames)
-  // and buffer cache (avoids re-reading from File if decode cache misses)
-  const frameCacheRef = React.useRef<Map<string, FrameDecodeCache>>(new Map());
-  const bufferCacheRef = React.useRef<Map<string, ArrayBuffer>>(new Map());
-
   const formatBytes = React.useCallback((bytes: number): string => {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB'];
@@ -404,124 +396,29 @@ export default function App() {
     return `${value.toFixed(precision)} ${units[exponent]}`;
   }, []);
 
-  const estimateRawBytes = React.useCallback((raw: RawDecodeResult): number => {
-    let bytes = 0;
-    for (const channel of Object.values(raw.channels)) {
-      bytes += channel.byteLength;
-    }
-    return bytes;
-  }, []);
-
-  const collectRawBuffers = React.useCallback(
-    (raw: RawDecodeResult, buffers: Set<ArrayBufferLike>): number => {
-      let bytes = 0;
-      for (const channel of Object.values(raw.channels)) {
-        const buffer = channel.buffer;
-        if (!buffers.has(buffer)) {
-          buffers.add(buffer);
-          bytes += buffer.byteLength;
-        }
-      }
-      return bytes;
-    },
-    []
-  );
-
-  const computeCacheStats = React.useCallback((): CacheStats => {
-    const buffers = new Set<ArrayBufferLike>();
-    const rawBytes = rawPixelData ? collectRawBuffers(rawPixelData, buffers) : 0;
-    let partCacheBytes = 0;
-    let frameCacheBytes = 0;
-    let bufferCacheBytes = 0;
-    let uniqueCacheBytes = 0;
-
-    partCacheRef.current.forEach((raw) => {
-      partCacheBytes += estimateRawBytes(raw);
-      uniqueCacheBytes += collectRawBuffers(raw, buffers);
-    });
-
-    frameCacheRef.current.forEach((entry) => {
-      frameCacheBytes += estimateRawBytes(entry.rawPixelData);
-      uniqueCacheBytes += collectRawBuffers(entry.rawPixelData, buffers);
-    });
-
-    bufferCacheRef.current.forEach((buffer) => {
-      bufferCacheBytes += buffer.byteLength;
-      if (!buffers.has(buffer)) {
-        buffers.add(buffer);
-        uniqueCacheBytes += buffer.byteLength;
-      }
-    });
-
-    return {
-      cacheBytes: partCacheBytes + frameCacheBytes + bufferCacheBytes,
-      uniqueCacheBytes,
-      rawBytes,
-      totalUniqueBytes: rawBytes + uniqueCacheBytes,
-      partCacheBytes,
-      frameCacheBytes,
-      bufferCacheBytes,
-      partCacheCount: partCacheRef.current.size,
-      frameCacheCount: frameCacheRef.current.size,
-      bufferCacheCount: bufferCacheRef.current.size,
-    };
-  }, [collectRawBuffers, estimateRawBytes, rawPixelData]);
-
   const updateCacheStats = React.useCallback(() => {
-    setCacheStats(computeCacheStats());
-  }, [computeCacheStats]);
+    setCacheStats(exrCacheRef.current.computeStats(rawPixelData));
+  }, [rawPixelData]);
 
   const pruneCachesToLimit = React.useCallback(() => {
-    const maxBytes = clamp(maxCacheMB, CACHE_MB_MIN, CACHE_MB_MAX) * 1024 * 1024;
-    let total = 0;
-    partCacheRef.current.forEach((raw) => {
-      total += estimateRawBytes(raw);
-    });
-    frameCacheRef.current.forEach((entry) => {
-      total += estimateRawBytes(entry.rawPixelData);
-    });
-    bufferCacheRef.current.forEach((buffer) => {
-      total += buffer.byteLength;
-    });
-
-    let purged = false;
-    while (total > maxBytes) {
-      if (bufferCacheRef.current.size > 0) {
-        const key = bufferCacheRef.current.keys().next().value;
-        const entry = bufferCacheRef.current.get(key);
-        if (entry) total -= entry.byteLength;
-        bufferCacheRef.current.delete(key);
-        purged = true;
-        continue;
-      }
-      if (frameCacheRef.current.size > 0) {
-        const key = frameCacheRef.current.keys().next().value;
-        const entry = frameCacheRef.current.get(key);
-        if (entry) total -= estimateRawBytes(entry.rawPixelData);
-        frameCacheRef.current.delete(key);
-        purged = true;
-        continue;
-      }
-      if (partCacheRef.current.size > 0) {
-        const key = partCacheRef.current.keys().next().value;
-        const entry = partCacheRef.current.get(key);
-        if (entry) total -= estimateRawBytes(entry);
-        partCacheRef.current.delete(key);
-        purged = true;
-        continue;
-      }
-      break;
-    }
+    exrCacheRef.current.setMaxCacheMB(maxCacheMB);
+    exrCacheRef.current.setPolicy(cachePolicy);
+    exrCacheRef.current.setDistance(cacheDistance);
+    
+    const purged = exrCacheRef.current.prune(
+      sequenceFrameIndex,
+      sequenceFrames,
+      CACHE_MB_MIN,
+      CACHE_MB_MAX
+    );
 
     if (purged) {
       updateCacheStats();
     }
-  }, [estimateRawBytes, maxCacheMB, updateCacheStats]);
+  }, [maxCacheMB, cachePolicy, cacheDistance, sequenceFrameIndex, sequenceFrames, updateCacheStats]);
 
   const purgeCaches = React.useCallback(() => {
-    partCacheRef.current.clear();
-    frameCacheRef.current.clear();
-    bufferCacheRef.current.clear();
+    exrCacheRef.current.clearAll();
     updateCacheStats();
   }, [updateCacheStats]);
 
@@ -562,6 +459,12 @@ export default function App() {
     input.setAttribute('directory', '');
   }, []);
 
+  // trim caches when policy/distance/current frame changes
+  React.useEffect(() => {
+    pruneCachesToLimit();
+    updateCacheStats();
+  }, [cachePolicy, cacheDistance, sequenceFrameIndex, pruneCachesToLimit, updateCacheStats]);
+
   const canInteractWithViewport = Boolean(structure && rawPixelData);
   const hasSequenceFrames = sequenceFrames.length > 0;
   const canPlaySequence = sequenceFrames.length > 1;
@@ -571,8 +474,7 @@ export default function App() {
   // dependency ensures we recompute when the cache changes.
   const sequenceCacheMask = React.useMemo(() => {
     if (sequenceFrames.length === 0) return [];
-    const set = frameCacheRef.current;
-    return sequenceFrames.map((f) => set.has(f.id));
+    return sequenceFrames.map((f) => exrCacheRef.current.hasFrame(f.id));
   }, [sequenceFrames, cacheStats.frameCacheCount]);
   const selectedSequenceSource =
     selectedSequenceSourceId !== null
@@ -925,8 +827,8 @@ export default function App() {
     setSequenceFrames([]);
     setSequenceFrameIndex(null);
     setIsSequencePlaying(false);
-    frameCacheRef.current.clear();
-    bufferCacheRef.current.clear();
+    exrCacheRef.current.clearFrameCache();
+    exrCacheRef.current.clearBufferCache();
     updateCacheStats();
   };
 
@@ -938,8 +840,8 @@ export default function App() {
     setSequenceFrames(source.frames);
     setSequenceFrameIndex(0);
     // Clear per-source caches when switching sequences
-    frameCacheRef.current.clear();
-    bufferCacheRef.current.clear();
+    exrCacheRef.current.clearFrameCache();
+    exrCacheRef.current.clearBufferCache();
     updateCacheStats();
   };
 
@@ -972,7 +874,7 @@ export default function App() {
     if (isMobile) setIsSidebarOpen(false);
 
     // Clear the part cache when loading a new file
-    partCacheRef.current.clear();
+    exrCacheRef.current.clearPartCache();
     updateCacheStats();
 
     try {
@@ -1164,13 +1066,13 @@ export default function App() {
     const loadSelectedFrame = async () => {
       try {
         // 1. Check full decode cache (fastest path)
-        const cached = frameCacheRef.current.get(frame.id);
+        const cached = exrCacheRef.current.getFrame(frame.id);
         if (cached) {
           if (requestId !== sequenceSelectionEpochRef.current) return;
           decodeEpochRef.current += 1;
           // Pre-populate part cache so the decode effect short-circuits
-          partCacheRef.current.clear();
-          partCacheRef.current.set(cached.partId, cached.rawPixelData);
+          exrCacheRef.current.clearPartCache();
+          exrCacheRef.current.setPart(cached.partId, cached.rawPixelData);
           setFileName(selectedSequenceSource?.label ?? frame.relativePath);
           setLogs([]);
           setStructure(cached.structure);
@@ -1181,11 +1083,11 @@ export default function App() {
         }
 
         // 2. Check buffer cache (avoids re-reading from File)
-        let buffer = bufferCacheRef.current.get(frame.id);
+        let buffer = exrCacheRef.current.getBuffer(frame.id);
         if (!buffer) {
           buffer = await readFileAsArrayBuffer(frame.file);
           if (requestId !== sequenceSelectionEpochRef.current) return;
-          bufferCacheRef.current.set(frame.id, buffer);
+          exrCacheRef.current.setBuffer(frame.id, buffer);
           pruneCachesToLimit();
           updateCacheStats();
         } else {
@@ -1233,11 +1135,9 @@ export default function App() {
     if (safeSequenceFrameIndex === null || !rawPixelData || !structure || selectedPartId === null) return;
     const frame = sequenceFrames[safeSequenceFrameIndex];
     if (!frame) return;
-    const entry: FrameDecodeCache = { structure, rawPixelData, partId: selectedPartId };
-    frameCacheRef.current.set(frame.id, entry);
-    if (frameCacheRef.current.size > MAX_FRAME_CACHE) {
-      const oldest = frameCacheRef.current.keys().next().value;
-      if (oldest !== undefined) frameCacheRef.current.delete(oldest);
+    exrCacheRef.current.setFrame(frame.id, { structure, rawPixelData, partId: selectedPartId });
+    if (exrCacheRef.current.getFrameCacheSize() > MAX_FRAME_CACHE) {
+      exrCacheRef.current.deleteOldestFrame();
     }
     pruneCachesToLimit();
     updateCacheStats();
@@ -1281,7 +1181,7 @@ export default function App() {
 
   const handleSelectPart = (partId: number) => {
     if (selectedPartId !== partId) {
-      const cachedRaw = partCacheRef.current.get(partId) ?? null;
+      const cachedRaw = exrCacheRef.current.getPart(partId) ?? null;
       setRawPixelData(cachedRaw);
       // don't clear histogram here – keep the old bars visible until the new
       // render effect replaces them, which avoids a flash when switching parts
@@ -1303,8 +1203,9 @@ export default function App() {
       if (!fileBuffer || !structure || selectedPartId === null) return;
 
       // Check Cache First
-      if (partCacheRef.current.has(selectedPartId)) {
-        setRawPixelData(partCacheRef.current.get(selectedPartId)!);
+      const cachedPart = exrCacheRef.current.getPart(selectedPartId);
+      if (cachedPart) {
+        setRawPixelData(cachedPart);
         return;
       }
 
@@ -1324,7 +1225,7 @@ export default function App() {
 
               if (rawResult) {
                   // Save to cache
-                  partCacheRef.current.set(selectedPartId, rawResult);
+                  exrCacheRef.current.setPart(selectedPartId, rawResult);
                   setRawPixelData(rawResult);
                   pruneCachesToLimit();
                   updateCacheStats();
@@ -1384,7 +1285,7 @@ export default function App() {
 
   const handleSelectLayer = (partId: number, layerPrefix: string) => {
       if (selectedPartId !== partId) {
-          const cachedRaw = partCacheRef.current.get(partId) ?? null;
+          const cachedRaw = exrCacheRef.current.getPart(partId) ?? null;
           setRawPixelData(cachedRaw);
           // do not clear histogram here for the same reason as handleSelectPart
           setInspectCursor(null);
@@ -1402,7 +1303,7 @@ export default function App() {
 
   const handleSelectChannel = (partId: number, channelName: string) => {
       if (selectedPartId !== partId) {
-          const cachedRaw = partCacheRef.current.get(partId) ?? null;
+          const cachedRaw = exrCacheRef.current.getPart(partId) ?? null;
           setRawPixelData(cachedRaw);
           // keep old histogram until new one arrives
           setInspectCursor(null);
@@ -1609,6 +1510,14 @@ export default function App() {
   const handleCacheLimitChange = (value: number) => {
     const next = clamp(Math.round(value), CACHE_MB_MIN, CACHE_MB_MAX);
     setMaxCacheMB(next);
+  };
+
+  const handleCachePolicyChange = (policy: 'oldest' | 'distance') => {
+    setCachePolicy(policy);
+  };
+
+  const handleCacheDistanceChange = (value: number) => {
+    setCacheDistance(Math.max(0, Math.round(value)));
   };
 
   // Compute inspector values for rendering
@@ -2082,6 +1991,10 @@ export default function App() {
               cacheUsagePercent={cacheUsagePercent}
               cacheExceeded={cacheExceeded}
               onCacheLimitChange={handleCacheLimitChange}
+              cachePolicy={cachePolicy}
+              cacheDistance={cacheDistance}
+              onCachePolicyChange={handleCachePolicyChange}
+              onCacheDistanceChange={handleCacheDistanceChange}
               onPurgeCaches={purgeCaches}
               formatBytes={formatBytes}
             />
