@@ -9,6 +9,14 @@ type PrecisionSliderProps = {
   ariaLabel: string;
   className?: string;
   thresholdScale?: number;
+  /**
+   * Optional array describing which discrete positions along the slider
+   * should be highlighted (e.g. frame-cache state).
+   * length is treated as the number of steps; each truthy entry will be
+   * painted with the accent color. The gradient is recomputed on every
+   * render so callers should memoize input if expensive.
+   */
+  cacheMask?: boolean[];
 };
 
 type PrecisionSliderDragState = {
@@ -77,6 +85,7 @@ export const PrecisionSlider = ({
   ariaLabel,
   className = '',
   thresholdScale = 1,
+  cacheMask,
 }: PrecisionSliderProps) => {
   const sliderRef = React.useRef<HTMLDivElement>(null);
   const dragRef = React.useRef<PrecisionSliderDragState | null>(null);
@@ -169,6 +178,25 @@ export const PrecisionSlider = ({
     commitValue(nextValue);
   }, [commitValue, max, min, step, value]);
 
+  // build a gradient that colors cached segments using the accent color;
+  // un-cached pieces remain the default track color.  We only bother when
+  // a mask is provided and has the same length as the number of steps.
+  const trackBackground = React.useMemo((): string | undefined => {
+    if (!cacheMask || cacheMask.length === 0) return undefined;
+    const len = cacheMask.length;
+    if (len === 0) return undefined;
+    const segs: string[] = [];
+    const trackColor = 'var(--tone-slider-track)';
+    const cacheColor = 'var(--theme-accent)';
+    for (let i = 0; i < len; i++) {
+      const start = (i / len) * 100;
+      const end = ((i + 1) / len) * 100;
+      const color = cacheMask[i] ? cacheColor : trackColor;
+      segs.push(`${color} ${start}% ${end}%`);
+    }
+    return `linear-gradient(to right, ${segs.join(', ')})`;
+  }, [cacheMask]);
+
   const style: PrecisionSliderStyle = {
     '--value-pct': `${valuePct}%`,
     '--precision-scale': `${precisionScale}`,
@@ -192,7 +220,11 @@ export const PrecisionSlider = ({
       onLostPointerCapture={releaseDrag}
       onKeyDown={handleKeyDown}
     >
-      <div className="tone-slider__track" aria-hidden="true" />
+      <div
+        className="tone-slider__track"
+        aria-hidden="true"
+        style={trackBackground ? { background: trackBackground } : undefined}
+      />
       <div className="tone-slider__fill" aria-hidden="true" />
       <div className="tone-slider__handle" aria-hidden="true" />
     </div>

@@ -107,7 +107,7 @@
 
 .tone-slider__fill {
   width: var(--value-pct);
-  background: var(--theme-accent);
+  background: transparent;
 }
 
 .tone-slider__handle {

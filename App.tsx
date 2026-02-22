@@ -565,6 +565,15 @@ export default function App() {
   const canInteractWithViewport = Boolean(structure && rawPixelData);
   const hasSequenceFrames = sequenceFrames.length > 0;
   const canPlaySequence = sequenceFrames.length > 1;
+
+  // generate a boolean mask for sequence scrubber that marks which frames
+  // have been cached already (decoded). using cacheStats.frameCacheCount as a
+  // dependency ensures we recompute when the cache changes.
+  const sequenceCacheMask = React.useMemo(() => {
+    if (sequenceFrames.length === 0) return [];
+    const set = frameCacheRef.current;
+    return sequenceFrames.map((f) => set.has(f.id));
+  }, [sequenceFrames, cacheStats.frameCacheCount]);
   const selectedSequenceSource =
     selectedSequenceSourceId !== null
       ? sequenceSources.find((source) => source.id === selectedSequenceSourceId) ?? null
@@ -2142,6 +2151,7 @@ export default function App() {
                 }}
                 className="flex-1 min-w-0"
                 ariaLabel={`Frame ${(safeSequenceFrameIndex ?? 0) + 1} of ${sequenceFrames.length}`}
+                cacheMask={sequenceCacheMask}
               />
 
               {/* Frame counter */}
