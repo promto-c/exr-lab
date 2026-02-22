@@ -2088,15 +2088,6 @@ export default function App() {
               <PixelInspector {...inspectData} visible={true} />
           )}
 
-          {/* Floating Sequence Transport Bar */}
-          {hasSequenceFrames && (
-            <div
-              data-touch-ui="true"
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-2 rounded-xl border border-neutral-700/70 bg-neutral-900/85 backdrop-blur shadow-2xl"
-              style={{ width: 'min(480px, calc(100% - 2rem))' }}
-              onMouseDown={(e) => e.stopPropagation()}
-              onTouchStart={(e) => e.stopPropagation()}
-          )}
 
           {/* Floating Sequence Transport Bar */}
           {hasSequenceFrames && (
