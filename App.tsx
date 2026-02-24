@@ -10,6 +10,7 @@ import { PreferencesView, CACHE_MB_MIN, CACHE_MB_MAX } from './components/Prefer
 import { ExrParser } from './services/exrParser';
 import { ExrDecoder } from './services/exr/decoder';
 import { ExrCache } from './core/cache';
+import { PrefetchEngine, PrefetchStrategy } from './core/prefetch';
 import { createRenderer, getRendererPreferenceFromQuery } from './services/render/createRenderer';
 import { RenderBackend, Renderer, RendererPreference, RawDecodeResult, ChannelMapping } from './services/render/types';
 import { LogEntry, ExrStructure, LogStatus, ExrChannel, CacheStats } from './types';
@@ -286,6 +287,14 @@ const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> => (
 type ViewMode = 'rgb' | 'alpha';
 type WindowRect = { x: number; y: number; width: number; height: number };
 
+/**
+ * Playback strategy when scrubbing through a sequence.
+ * - 'timing'  – fire frames at the target FPS; skip frames not yet cached
+ * - 'every'   – play every frame in order; slow down if decode can't keep up
+ * - 'cached'  – wait until the next frame is fully decoded before advancing
+ */
+export type PlaybackMode = 'timing' | 'every' | 'cached';
+
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 
 const isTextInputLikeTarget = (target: EventTarget | null): boolean => {
@@ -308,6 +317,8 @@ export default function App() {
   const [sequenceFrames, setSequenceFrames] = React.useState<SequenceFrame[]>([]);
   const [sequenceFrameIndex, setSequenceFrameIndex] = React.useState<number | null>(null);
   const [isSequencePlaying, setIsSequencePlaying] = React.useState(false);
+  const [playbackMode, setPlaybackMode] = React.useState<PlaybackMode>('every');
+  const [sequenceFps, setSequenceFps] = React.useState(DEFAULT_SEQUENCE_FPS);
 
   // Raw Data Cache (Map of Float32Arrays)
   const [rawPixelData, setRawPixelData] = React.useState<RawDecodeResult | null>(null);
@@ -337,6 +348,8 @@ export default function App() {
   const [maxCacheMB, setMaxCacheMB] = React.useState(DEFAULT_MAX_CACHE_MB);
   const [cachePolicy, setCachePolicy] = React.useState<'oldest' | 'distance'>('oldest');
   const [cacheDistance, setCacheDistance] = React.useState(64);
+  const [prefetchStrategy, setPrefetchStrategy] = React.useState<PrefetchStrategy>('forward');
+  const [prefetchConcurrency, setPrefetchConcurrency] = React.useState(2);
   const [cacheStats, setCacheStats] = React.useState<CacheStats>({
     cacheBytes: 0,
     uniqueCacheBytes: 0,
@@ -388,6 +401,7 @@ export default function App() {
   // Tracks which sequence frame ID the current rawPixelData belongs to.
   // Used by the cache-save effect so it never stores data under the wrong key.
   const decodedFrameIdRef = React.useRef<string | null>(null);
+  const prefetchEngineRef = React.useRef<PrefetchEngine>(new PrefetchEngine());
 
   const formatBytes = React.useCallback((bytes: number): string => {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -503,6 +517,32 @@ export default function App() {
     const pad = Math.max(String(total).length, 1);
     return `${String(current).padStart(pad, '0')} / ${String(total).padStart(pad, '0')}`;
   }, [safeSequenceFrameIndex, sequenceFrames]);
+
+  // Background prefetch engine — restarts whenever the playhead, strategy,
+  // concurrency, or frame list changes.
+  React.useEffect(() => {
+    const engine = prefetchEngineRef.current;
+    if (prefetchStrategy === 'on-demand' || sequenceFrames.length === 0 || safeSequenceFrameIndex === null) {
+      engine.stop();
+      return;
+    }
+
+    engine.start({
+      cache: exrCacheRef.current,
+      frames: sequenceFrames,
+      currentIndex: safeSequenceFrameIndex,
+      strategy: prefetchStrategy,
+      concurrency: prefetchConcurrency,
+      onProgress: () => {
+        pruneCachesToLimit();
+        updateCacheStats();
+      },
+    });
+
+    return () => {
+      engine.stop();
+    };
+  }, [prefetchStrategy, prefetchConcurrency, safeSequenceFrameIndex, sequenceFrames, pruneCachesToLimit, updateCacheStats]);
 
   React.useEffect(() => {
     if (!canPlaySequence && isSequencePlaying) {
@@ -828,6 +868,7 @@ export default function App() {
   };
 
   const clearSequenceBinding = () => {
+    prefetchEngineRef.current.stop();
     sequenceSelectionEpochRef.current += 1;
     sequenceAutoFitRef.current = false;
     decodedFrameIdRef.current = null;
@@ -842,6 +883,7 @@ export default function App() {
   };
 
   const activateSequenceSource = (source: SequenceSource, autoFit = true) => {
+    prefetchEngineRef.current.stop();
     sequenceSelectionEpochRef.current += 1;
     sequenceAutoFitRef.current = autoFit;
     setIsSequencePlaying(false);
@@ -1102,10 +1144,11 @@ export default function App() {
         let buffer = exrCacheRef.current.getBuffer(frame.id);
         if (!buffer) {
           buffer = await readFileAsArrayBuffer(frame.file);
-          if (requestId !== sequenceSelectionEpochRef.current) return;
+          // Always cache the buffer — the I/O work is already done.
           exrCacheRef.current.setBuffer(frame.id, buffer);
           pruneCachesToLimit();
           updateCacheStats();
+          if (requestId !== sequenceSelectionEpochRef.current) return;
         } else {
           if (requestId !== sequenceSelectionEpochRef.current) return;
         }
@@ -1133,19 +1176,49 @@ export default function App() {
     void loadSelectedFrame();
   }, [safeSequenceFrameIndex, selectedSequenceSource?.label, sequenceFrames]);
 
+  // Playback interval effect — behaviour depends on playbackMode
   React.useEffect(() => {
-    if (!isSequencePlaying || !canPlaySequence || isProcessing) return;
+    if (!isSequencePlaying || !canPlaySequence) return;
 
-    const intervalMs = 1000 / DEFAULT_SEQUENCE_FPS;
+    // 'every' mode: wait while the current frame is still processing so we
+    // never skip it, but otherwise advance at the target rate.
+    if (playbackMode === 'every' && isProcessing) return;
+
+    // 'cached' mode: only advance when the *next* frame is already decoded.
+    if (playbackMode === 'cached') {
+      const peekNext = (idx: number) => (idx + 1) % sequenceFrames.length;
+      const currentIdx = sequenceFrameIndex ?? 0;
+      const nextFrame = sequenceFrames[peekNext(currentIdx)];
+      if (!nextFrame || !exrCacheRef.current.hasFrame(nextFrame.id)) return;
+    }
+
+    const intervalMs = 1000 / sequenceFps;
     const timer = window.setInterval(() => {
-      setSequenceFrameIndex((previousIndex) => {
-        const base = previousIndex ?? 0;
-        return (base + 1) % sequenceFrames.length;
-      });
+      if (playbackMode === 'timing') {
+        // 'timing': advance regardless; skip uncached frames
+        setSequenceFrameIndex((prev) => {
+          const base = prev ?? 0;
+          const len = sequenceFrames.length;
+          // Try next frames, skip uncached ones (up to full cycle)
+          for (let step = 1; step <= len; step++) {
+            const candidate = (base + step) % len;
+            const f = sequenceFrames[candidate];
+            if (f && exrCacheRef.current.hasFrame(f.id)) return candidate;
+          }
+          // fallback – just step forward
+          return (base + 1) % len;
+        });
+      } else {
+        // 'every' and 'cached' just step by one
+        setSequenceFrameIndex((prev) => {
+          const base = prev ?? 0;
+          return (base + 1) % sequenceFrames.length;
+        });
+      }
     }, intervalMs);
 
     return () => window.clearInterval(timer);
-  }, [canPlaySequence, isProcessing, isSequencePlaying, sequenceFrames.length]);
+  }, [canPlaySequence, isProcessing, isSequencePlaying, playbackMode, sequenceFps, sequenceFrameIndex, sequenceFrames]);
 
   // NOTE: Frame-cache saving is done directly inside the decode effect above
   // (using a frame ID captured synchronously before any async gap) so that the
@@ -1234,17 +1307,13 @@ export default function App() {
                   partId: selectedPartId
               });
 
-              if (requestEpoch !== decodeEpochRef.current) {
-                  return;
-              }
-
               if (rawResult) {
-                  // Save to part cache
+                  // Always cache the decoded result — even when the user has
+                  // already navigated to a different frame.  This ensures
+                  // background decodes transition from 'buffer' (orange) to
+                  // 'decoded' without requiring the user to revisit the frame.
                   exrCacheRef.current.setPart(selectedPartId, rawResult);
 
-                  // Save to sequence-frame cache using the ID captured at
-                  // effect start — NOT from the mutable ref which may have
-                  // been overwritten by a newer frame during the decode.
                   if (frameIdForCache) {
                     exrCacheRef.current.setFrame(frameIdForCache, {
                       structure,
@@ -1256,9 +1325,13 @@ export default function App() {
                     }
                   }
 
-                  setRawPixelData(rawResult);
                   pruneCachesToLimit();
                   updateCacheStats();
+
+                  // Only update UI state if this is still the active request.
+                  if (requestEpoch !== decodeEpochRef.current) return;
+
+                  setRawPixelData(rawResult);
               }
           } finally {
               if (requestEpoch === decodeEpochRef.current) {
@@ -2027,6 +2100,14 @@ export default function App() {
               onCacheDistanceChange={handleCacheDistanceChange}
               onPurgeCaches={purgeCaches}
               formatBytes={formatBytes}
+              playbackMode={playbackMode}
+              onPlaybackModeChange={setPlaybackMode}
+              sequenceFps={sequenceFps}
+              onSequenceFpsChange={setSequenceFps}
+              prefetchStrategy={prefetchStrategy}
+              onPrefetchStrategyChange={setPrefetchStrategy}
+              prefetchConcurrency={prefetchConcurrency}
+              onPrefetchConcurrencyChange={setPrefetchConcurrency}
             />
           )}
 
@@ -2067,7 +2148,7 @@ export default function App() {
                 onClick={() => setIsSequencePlaying((prev) => !prev)}
                 disabled={!canPlaySequence}
                 className="shrink-0 p-1.5 rounded-lg text-neutral-200 hover:text-white hover:bg-teal-700/50 disabled:opacity-40 transition-colors"
-                title={isSequencePlaying ? 'Pause  (Space)' : `Play  (Space) — ${DEFAULT_SEQUENCE_FPS} fps`}
+                title={isSequencePlaying ? 'Pause  (Space)' : `Play  (Space) — ${sequenceFps} fps`}
               >
                 {isSequencePlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
               </button>
