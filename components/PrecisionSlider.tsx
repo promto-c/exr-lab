@@ -1,5 +1,13 @@
 import React from 'react';
 
+/**
+ * Cache stage for each frame in the sequence scrubber.
+ * - 'none'    – not cached
+ * - 'buffer'  – raw file bytes loaded (not yet decoded)
+ * - 'decoded' – fully decoded pixel data ready
+ */
+export type CacheStage = 'none' | 'buffer' | 'decoded';
+
 type PrecisionSliderProps = {
   value: number;
   min: number;
@@ -10,13 +18,15 @@ type PrecisionSliderProps = {
   className?: string;
   thresholdScale?: number;
   /**
-   * Optional array describing which discrete positions along the slider
-   * should be highlighted (e.g. frame-cache state).
-   * length is treated as the number of steps; each truthy entry will be
-   * painted with the accent color. The gradient is recomputed on every
-   * render so callers should memoize input if expensive.
+   * Optional array describing the cache stage for each discrete position
+   * along the slider (e.g. frame-cache state).  Length is treated as the
+   * number of steps; each entry controls the segment color:
+   *   'none'    → default track color
+   *   'buffer'  → buffer-cached color (amber)
+   *   'decoded' → accent (teal)
+   * For backwards compat, a boolean[] is still accepted (true → 'decoded').
    */
-  cacheMask?: boolean[];
+  cacheMask?: CacheStage[] | boolean[];
 };
 
 type PrecisionSliderDragState = {
@@ -178,20 +188,25 @@ export const PrecisionSlider = ({
     commitValue(nextValue);
   }, [commitValue, max, min, step, value]);
 
-  // build a gradient that colors cached segments using the accent color;
-  // un-cached pieces remain the default track color.  We only bother when
-  // a mask is provided and has the same length as the number of steps.
+  // build a gradient that colors cached segments based on their cache stage;
+  // 'none' → default track, 'buffer' → amber, 'decoded' → accent.
   const trackBackground = React.useMemo((): string | undefined => {
     if (!cacheMask || cacheMask.length === 0) return undefined;
     const len = cacheMask.length;
-    if (len === 0) return undefined;
-    const segs: string[] = [];
     const trackColor = 'var(--tone-slider-track)';
-    const cacheColor = 'var(--theme-accent)';
+    const bufferColor = 'var(--tone-slider-cache-buffer)';
+    const decodedColor = 'var(--theme-accent)';
+    const segs: string[] = [];
     for (let i = 0; i < len; i++) {
       const start = (i / len) * 100;
       const end = ((i + 1) / len) * 100;
-      const color = cacheMask[i] ? cacheColor : trackColor;
+      const raw = cacheMask[i];
+      let color: string;
+      if (typeof raw === 'boolean') {
+        color = raw ? decodedColor : trackColor;
+      } else {
+        color = raw === 'decoded' ? decodedColor : raw === 'buffer' ? bufferColor : trackColor;
+      }
       segs.push(`${color} ${start}% ${end}%`);
     }
     return `linear-gradient(to right, ${segs.join(', ')})`;

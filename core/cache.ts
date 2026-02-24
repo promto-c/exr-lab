@@ -73,6 +73,10 @@ export class ExrCache {
     return this.frameCache.has(frameId);
   }
 
+  public hasBuffer(frameId: string): boolean {
+    return this.bufferCache.has(frameId);
+  }
+
   public clearPartCache() {
     this.partCache.clear();
   }

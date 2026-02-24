@@ -5,7 +5,7 @@ import { LogPanel } from './components/LogPanel';
 import { DropZone } from './components/DropZone';
 import { HistogramOverlay } from './components/HistogramOverlay';
 import { PixelInspector } from './components/PixelInspector';
-import { PrecisionSlider } from './components/PrecisionSlider';
+import { PrecisionSlider, CacheStage } from './components/PrecisionSlider';
 import { PreferencesView, CACHE_MB_MIN, CACHE_MB_MAX } from './components/PreferencesView';
 import { ExrParser } from './services/exrParser';
 import { ExrDecoder } from './services/exr/decoder';
@@ -385,6 +385,9 @@ export default function App() {
   const shouldAutoFitRef = React.useRef(true);
   const sequenceSelectionEpochRef = React.useRef(0);
   const sequenceAutoFitRef = React.useRef(false);
+  // Tracks which sequence frame ID the current rawPixelData belongs to.
+  // Used by the cache-save effect so it never stores data under the wrong key.
+  const decodedFrameIdRef = React.useRef<string | null>(null);
 
   const formatBytes = React.useCallback((bytes: number): string => {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -469,13 +472,18 @@ export default function App() {
   const hasSequenceFrames = sequenceFrames.length > 0;
   const canPlaySequence = sequenceFrames.length > 1;
 
-  // generate a boolean mask for sequence scrubber that marks which frames
-  // have been cached already (decoded). using cacheStats.frameCacheCount as a
-  // dependency ensures we recompute when the cache changes.
-  const sequenceCacheMask = React.useMemo(() => {
+  // generate a stage mask for sequence scrubber that marks the cache state of
+  // each frame: 'decoded' (fully cached), 'buffer' (file bytes loaded), or 'none'.
+  // cacheStats counts as dependencies to ensure we recompute when cache changes.
+  const sequenceCacheMask = React.useMemo<CacheStage[]>(() => {
     if (sequenceFrames.length === 0) return [];
-    return sequenceFrames.map((f) => exrCacheRef.current.hasFrame(f.id));
-  }, [sequenceFrames, cacheStats.frameCacheCount]);
+    const cache = exrCacheRef.current;
+    return sequenceFrames.map((f): CacheStage => {
+      if (cache.hasFrame(f.id)) return 'decoded';
+      if (cache.hasBuffer(f.id)) return 'buffer';
+      return 'none';
+    });
+  }, [sequenceFrames, cacheStats.frameCacheCount, cacheStats.bufferCacheCount]);
   const selectedSequenceSource =
     selectedSequenceSourceId !== null
       ? sequenceSources.find((source) => source.id === selectedSequenceSourceId) ?? null
@@ -822,6 +830,7 @@ export default function App() {
   const clearSequenceBinding = () => {
     sequenceSelectionEpochRef.current += 1;
     sequenceAutoFitRef.current = false;
+    decodedFrameIdRef.current = null;
     setSequenceSources([]);
     setSelectedSequenceSourceId(null);
     setSequenceFrames([]);
@@ -846,7 +855,7 @@ export default function App() {
   };
 
   const handleFileLoaded = async (name: string, buffer: ArrayBuffer, options: FileLoadOptions = {}) => {
-    decodeEpochRef.current += 1;
+    const epoch = ++decodeEpochRef.current;
     shouldAutoFitRef.current = options.autoFit ?? true;
     const displayName = options.displayName ?? name;
     const isFrameChange = options.isFrameChange ?? false;
@@ -910,6 +919,10 @@ export default function App() {
       const parser = new ExrParser(buffer, handleLog);
       const result = await parser.parse();
 
+      // Another frame may have been loaded while we were parsing (e.g. from
+      // the decode cache).  Bail out so we don't overwrite its state.
+      if (epoch !== decodeEpochRef.current) return;
+
       if (result) {
         setStructure(result);
         if (result.parts.length > 0) {
@@ -929,7 +942,9 @@ export default function App() {
       });
       console.error(e);
     } finally {
-      setIsProcessing(false);
+      if (epoch === decodeEpochRef.current) {
+        setIsProcessing(false);
+      }
     }
   };
 
@@ -1070,6 +1085,7 @@ export default function App() {
         if (cached) {
           if (requestId !== sequenceSelectionEpochRef.current) return;
           decodeEpochRef.current += 1;
+          decodedFrameIdRef.current = frame.id;
           // Pre-populate part cache so the decode effect short-circuits
           exrCacheRef.current.clearPartCache();
           exrCacheRef.current.setPart(cached.partId, cached.rawPixelData);
@@ -1094,6 +1110,7 @@ export default function App() {
           if (requestId !== sequenceSelectionEpochRef.current) return;
         }
 
+        decodedFrameIdRef.current = frame.id;
         await handleFileLoaded(frame.name, buffer, {
           autoFit: shouldAutoFit,
           displayName: selectedSequenceSource?.label ?? frame.relativePath,
@@ -1130,19 +1147,9 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [canPlaySequence, isProcessing, isSequencePlaying, sequenceFrames.length]);
 
-  // Save decoded frame to decode cache while in sequence mode
-  React.useEffect(() => {
-    if (safeSequenceFrameIndex === null || !rawPixelData || !structure || selectedPartId === null) return;
-    const frame = sequenceFrames[safeSequenceFrameIndex];
-    if (!frame) return;
-    exrCacheRef.current.setFrame(frame.id, { structure, rawPixelData, partId: selectedPartId });
-    if (exrCacheRef.current.getFrameCacheSize() > MAX_FRAME_CACHE) {
-      exrCacheRef.current.deleteOldestFrame();
-    }
-    pruneCachesToLimit();
-    updateCacheStats();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawPixelData]);
+  // NOTE: Frame-cache saving is done directly inside the decode effect above
+  // (using a frame ID captured synchronously before any async gap) so that the
+  // data is always stored under the correct key — even during rapid scrubbing.
 
   // Keyboard shortcuts: ← / → step frames, Space toggles playback
   React.useEffect(() => {
@@ -1181,6 +1188,9 @@ export default function App() {
 
   const handleSelectPart = (partId: number) => {
     if (selectedPartId !== partId) {
+      // Clear sequence frame ref so a part-switch decode doesn't accidentally
+      // save under a stale sequence frame key.
+      decodedFrameIdRef.current = null;
       const cachedRaw = exrCacheRef.current.getPart(partId) ?? null;
       setRawPixelData(cachedRaw);
       // don't clear histogram here – keep the old bars visible until the new
@@ -1201,6 +1211,11 @@ export default function App() {
   // 1. Heavy Lifting: Decode binary when part changes
   React.useEffect(() => {
       if (!fileBuffer || !structure || selectedPartId === null) return;
+
+      // Capture the sequence-frame ID synchronously before any async work.
+      // This ties the decoded data to the correct frame even when the user
+      // scrubs to a different frame while the decode is in-flight.
+      const frameIdForCache = decodedFrameIdRef.current;
 
       // Check Cache First
       const cachedPart = exrCacheRef.current.getPart(selectedPartId);
@@ -1224,8 +1239,23 @@ export default function App() {
               }
 
               if (rawResult) {
-                  // Save to cache
+                  // Save to part cache
                   exrCacheRef.current.setPart(selectedPartId, rawResult);
+
+                  // Save to sequence-frame cache using the ID captured at
+                  // effect start — NOT from the mutable ref which may have
+                  // been overwritten by a newer frame during the decode.
+                  if (frameIdForCache) {
+                    exrCacheRef.current.setFrame(frameIdForCache, {
+                      structure,
+                      rawPixelData: rawResult,
+                      partId: selectedPartId,
+                    });
+                    if (exrCacheRef.current.getFrameCacheSize() > MAX_FRAME_CACHE) {
+                      exrCacheRef.current.deleteOldestFrame();
+                    }
+                  }
+
                   setRawPixelData(rawResult);
                   pruneCachesToLimit();
                   updateCacheStats();

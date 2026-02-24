@@ -2,6 +2,7 @@
   --theme-accent: #14b8a6;
   --theme-accent-rgb: 20 184 166;
   --tone-slider-track: #4b5563;
+  --tone-slider-cache-buffer: #f59e0b;
 }
 
 .toolbar-toggle-button {
