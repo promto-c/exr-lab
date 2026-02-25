@@ -5,7 +5,21 @@ import { LogPanel } from './components/LogPanel';
 import { DropZone } from './components/DropZone';
 import { HistogramOverlay } from './components/HistogramOverlay';
 import { PixelInspector } from './components/PixelInspector';
-import { PrecisionSlider, CacheStage } from './components/PrecisionSlider';
+import { PrecisionSlider } from './components/PrecisionSlider';
+
+/**
+ * Cache stage for each frame in the sequence scrubber.
+ * - 'none'    – not cached
+ * - 'buffer'  – raw file bytes loaded (not yet decoded)
+ * - 'decoded' – fully decoded pixel data ready
+ */
+type CacheStage = 'none' | 'buffer' | 'decoded';
+
+const CACHE_STAGE_COLORS: Record<CacheStage, string | null> = {
+  none: null,
+  buffer: 'var(--tone-slider-cache-buffer)',
+  decoded: 'var(--theme-accent)',
+};
 import { PreferencesView, CACHE_MB_MIN, CACHE_MB_MAX } from './components/PreferencesView';
 import { ExrParser } from './services/exrParser';
 import { ExrDecoder } from './services/exr/decoder';
@@ -402,6 +416,9 @@ export default function App() {
   // Used by the cache-save effect so it never stores data under the wrong key.
   const decodedFrameIdRef = React.useRef<string | null>(null);
   const prefetchEngineRef = React.useRef<PrefetchEngine>(new PrefetchEngine());
+  /** Tracks recently-visited frame indices for on-demand prefetch (most-recent last). */
+  const recentFrameIndicesRef = React.useRef<number[]>([]);
+  const RECENT_HISTORY_LIMIT = 64;
 
   const formatBytes = React.useCallback((bytes: number): string => {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -522,9 +539,18 @@ export default function App() {
   // concurrency, or frame list changes.
   React.useEffect(() => {
     const engine = prefetchEngineRef.current;
-    if (prefetchStrategy === 'on-demand' || sequenceFrames.length === 0 || safeSequenceFrameIndex === null) {
+    if (sequenceFrames.length === 0 || safeSequenceFrameIndex === null) {
       engine.stop();
       return;
+    }
+
+    // Track recently visited frames for on-demand strategy
+    const history = recentFrameIndicesRef.current;
+    if (history[history.length - 1] !== safeSequenceFrameIndex) {
+      history.push(safeSequenceFrameIndex);
+      if (history.length > RECENT_HISTORY_LIMIT) {
+        history.splice(0, history.length - RECENT_HISTORY_LIMIT);
+      }
     }
 
     engine.start({
@@ -533,6 +559,7 @@ export default function App() {
       currentIndex: safeSequenceFrameIndex,
       strategy: prefetchStrategy,
       concurrency: prefetchConcurrency,
+      recentIndices: history,
       onProgress: () => {
         pruneCachesToLimit();
         updateCacheStats();
@@ -869,6 +896,7 @@ export default function App() {
 
   const clearSequenceBinding = () => {
     prefetchEngineRef.current.stop();
+    recentFrameIndicesRef.current = [];
     sequenceSelectionEpochRef.current += 1;
     sequenceAutoFitRef.current = false;
     decodedFrameIdRef.current = null;
@@ -884,6 +912,7 @@ export default function App() {
 
   const activateSequenceSource = (source: SequenceSource, autoFit = true) => {
     prefetchEngineRef.current.stop();
+    recentFrameIndicesRef.current = [];
     sequenceSelectionEpochRef.current += 1;
     sequenceAutoFitRef.current = autoFit;
     setIsSequencePlaying(false);
@@ -2175,7 +2204,7 @@ export default function App() {
                 }}
                 className="flex-1 min-w-0"
                 ariaLabel={`Frame ${(safeSequenceFrameIndex ?? 0) + 1} of ${sequenceFrames.length}`}
-                cacheMask={sequenceCacheMask}
+                segmentColors={sequenceCacheMask.map((s) => CACHE_STAGE_COLORS[s])}
               />
 
               {/* Frame counter */}

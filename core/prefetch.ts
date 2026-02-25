@@ -10,8 +10,9 @@
  *    the playhead so that scrubbing back and forth is fluid.
  *  • **Full range** – eagerly pre-cache the entire sequence up to the
  *    memory limit (like Nuke's "pre-cache" action).
- *  • **On-demand** (default) – no background work; only decode when a
- *    frame is selected.
+ *  • **On-demand** (default) – decode frames the user scrubs through in
+ *    the background, prioritising the current frame and most-recently
+ *    visited frames first.  No speculative look-ahead.
  *
  * The engine runs entirely on the main thread's microtask queue via
  * `async / await` but yields between frames with `setTimeout(0)` to keep
@@ -43,7 +44,8 @@ export const PREFETCH_STRATEGIES: {
   {
     value: 'on-demand',
     label: 'On-demand',
-    description: 'No background caching — frames are decoded only when viewed.',
+    description:
+      'Decode frames you scrub through in the background. Prioritises the current frame, then recently visited frames — no speculative look-ahead.',
   },
   {
     value: 'forward',
@@ -82,6 +84,11 @@ export interface PrefetchEngineConfig {
   strategy: PrefetchStrategy;
   /** Maximum number of concurrent in-flight decode pipelines (1–8). */
   concurrency: number;
+  /**
+   * Recently visited frame indices (most-recent last).
+   * Used by 'on-demand' to build its decode queue.
+   */
+  recentIndices?: number[];
   /** Called whenever a frame finishes caching (buffer or decoded). */
   onProgress: () => void;
   /**
@@ -108,6 +115,7 @@ export class PrefetchEngine {
   private currentIndex = 0;
   private strategy: PrefetchStrategy = 'on-demand';
   private concurrency = 2;
+  private recentIndices: number[] = [];
   private onProgress: (() => void) | null = null;
   private onLog: ((log: LogEntry) => void) | null = null;
 
@@ -125,10 +133,11 @@ export class PrefetchEngine {
     this.currentIndex = config.currentIndex;
     this.strategy = config.strategy;
     this.concurrency = Math.max(1, Math.min(8, config.concurrency));
+    this.recentIndices = config.recentIndices ?? [];
     this.onProgress = config.onProgress;
     this.onLog = config.onLog ?? null;
 
-    if (this.strategy === 'on-demand' || this.frames.length === 0) {
+    if (this.frames.length === 0) {
       return; // nothing to prefetch
     }
 
@@ -161,6 +170,23 @@ export class PrefetchEngine {
     const indices: number[] = [];
 
     switch (this.strategy) {
+      case 'on-demand': {
+        // Current frame first, then recently-visited in reverse order
+        // (most-recently-visited = highest priority after current).
+        const seen = new Set<number>();
+        const maybeAdd = (i: number) => {
+          if (i >= 0 && i < len && !seen.has(i) && !cache.hasFrame(this.frames[i].id)) {
+            seen.add(i);
+            indices.push(i);
+          }
+        };
+        maybeAdd(idx);
+        for (let r = this.recentIndices.length - 1; r >= 0; r--) {
+          maybeAdd(this.recentIndices[r]);
+        }
+        break;
+      }
+
       case 'forward': {
         // Ahead of playhead, wrapping around
         for (let step = 1; step < len; step++) {

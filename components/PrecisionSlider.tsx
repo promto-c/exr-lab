@@ -1,13 +1,5 @@
 import React from 'react';
 
-/**
- * Cache stage for each frame in the sequence scrubber.
- * - 'none'    – not cached
- * - 'buffer'  – raw file bytes loaded (not yet decoded)
- * - 'decoded' – fully decoded pixel data ready
- */
-export type CacheStage = 'none' | 'buffer' | 'decoded';
-
 type PrecisionSliderProps = {
   value: number;
   min: number;
@@ -18,15 +10,12 @@ type PrecisionSliderProps = {
   className?: string;
   thresholdScale?: number;
   /**
-   * Optional array describing the cache stage for each discrete position
-   * along the slider (e.g. frame-cache state).  Length is treated as the
-   * number of steps; each entry controls the segment color:
-   *   'none'    → default track color
-   *   'buffer'  → buffer-cached color (amber)
-   *   'decoded' → accent (teal)
-   * For backwards compat, a boolean[] is still accepted (true → 'decoded').
+   * Optional per-segment color mask for the track background.
+   * Each entry is a CSS color string for that segment, or `null`/`undefined`
+   * to use the default track color.  The array length determines the
+   * number of equal-width segments.
    */
-  cacheMask?: CacheStage[] | boolean[];
+  segmentColors?: (string | null | undefined)[];
 };
 
 type PrecisionSliderDragState = {
@@ -95,7 +84,7 @@ export const PrecisionSlider = ({
   ariaLabel,
   className = '',
   thresholdScale = 1,
-  cacheMask,
+  segmentColors,
 }: PrecisionSliderProps) => {
   const sliderRef = React.useRef<HTMLDivElement>(null);
   const dragRef = React.useRef<PrecisionSliderDragState | null>(null);
@@ -188,29 +177,19 @@ export const PrecisionSlider = ({
     commitValue(nextValue);
   }, [commitValue, max, min, step, value]);
 
-  // build a gradient that colors cached segments based on their cache stage;
-  // 'none' → default track, 'buffer' → amber, 'decoded' → accent.
+  // Build a gradient from per-segment colors; null entries use the default track color.
   const trackBackground = React.useMemo((): string | undefined => {
-    if (!cacheMask || cacheMask.length === 0) return undefined;
-    const len = cacheMask.length;
-    const trackColor = 'var(--tone-slider-track)';
-    const bufferColor = 'var(--tone-slider-cache-buffer)';
-    const decodedColor = 'var(--theme-accent)';
+    if (!segmentColors || segmentColors.length === 0) return undefined;
+    const len = segmentColors.length;
+    const defaultColor = 'var(--tone-slider-track)';
     const segs: string[] = [];
     for (let i = 0; i < len; i++) {
       const start = (i / len) * 100;
       const end = ((i + 1) / len) * 100;
-      const raw = cacheMask[i];
-      let color: string;
-      if (typeof raw === 'boolean') {
-        color = raw ? decodedColor : trackColor;
-      } else {
-        color = raw === 'decoded' ? decodedColor : raw === 'buffer' ? bufferColor : trackColor;
-      }
-      segs.push(`${color} ${start}% ${end}%`);
+      segs.push(`${segmentColors[i] ?? defaultColor} ${start}% ${end}%`);
     }
     return `linear-gradient(to right, ${segs.join(', ')})`;
-  }, [cacheMask]);
+  }, [segmentColors]);
 
   const style: PrecisionSliderStyle = {
     '--value-pct': `${valuePct}%`,
