@@ -1,0 +1,36 @@
+{
+  "name": "@blackboard/exr-reader",
+  "version": "0.1.0",
+  "description": "Production-grade OpenEXR scanline parser/decoder for browser and Node.js",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "import": "./dist/browser/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean --out-dir dist && tsup src/browser/index.ts --format esm --dts --sourcemap --out-dir dist/browser",
+    "test": "vitest run src/__tests__",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.browser.json",
+    "benchmark": "vitest bench run bench"
+  },
+  "dependencies": {
+    "fflate": "0.8.2"
+  }
+}

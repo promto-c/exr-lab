@@ -1,29 +1,40 @@
 {
-  "name": "exr-lab",
+  "name": "exr-workspace",
   "private": true,
-  "version": "0.0.9",
-  "type": "module",
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@vitejs/plugin-react": "^5.1.4",
-    "fflate": "0.8.2",
-    "lucide-react": "^0.563.0",
-    "path": "^0.12.7",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "vite": "^7.3.1",
-    "vitest": "^4.0.18"
+    "dev": "npm run --workspace @blackboard/exr-lab dev",
+    "build": "npm run --workspaces build",
+    "preview": "npm run --workspace @blackboard/exr-lab preview",
+    "test": "npm run --workspaces test",
+    "typecheck": "npm run --workspaces typecheck",
+    "lint": "eslint . --ext .ts,.tsx,.mts,.cts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "benchmark": "npm run --workspace @blackboard/exr-reader benchmark",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "changeset publish"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.29.6",
     "@types/node": "^22.14.0",
-    "@vitejs/plugin-react": "^5.0.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.1",
+    "@typescript-eslint/eslint-plugin": "^8.46.1",
+    "@typescript-eslint/parser": "^8.46.1",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "prettier": "^3.6.2",
+    "tsup": "^8.5.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0",
-    "vite-plugin-pwa": "^1.2.0",
-    "workbox-window": "^7.4.0"
+    "vite": "^6.4.1",
+    "vitest": "^4.0.18"
   }
 }

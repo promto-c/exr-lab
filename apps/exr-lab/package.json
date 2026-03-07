@@ -1,0 +1,24 @@
+{
+  "name": "@blackboard/exr-lab",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.worker.json"
+  },
+  "dependencies": {
+    "@blackboard/exr-reader": "file:../../packages/exr-reader",
+    "lucide-react": "^0.563.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "workbox-window": "^7.4.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.1.4",
+    "vite-plugin-pwa": "^1.2.0"
+  }
+}

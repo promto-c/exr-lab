@@ -3,7 +3,7 @@ export const EXR_MAGIC = 20000630; // 0x762f3101
 export const PIXEL_TYPES = {
   0: 'UINT',
   1: 'HALF',
-  2: 'FLOAT'
+  2: 'FLOAT',
 };
 
 export const COMPRESSION_NAMES = {

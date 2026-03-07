@@ -1,16 +1,19 @@
-# EXR Lab
+# EXR Workspace
 
-A browser-based OpenEXR reader and previewer with a visual decoding pipeline log.
+Monorepo for:
 
-## Live Demo
+- `@blackboard/exr-reader`: reusable OpenEXR parser/decoder library.
+- `@blackboard/exr-lab`: demo viewer app consuming the library.
 
-https://promto-c.github.io/exr-lab/
-
-## Run Locally
+## Quick Start
 
 Prerequisites: Node.js 20+
 
 1. Install dependencies: `npm install`
-2. Start dev server: `npm run dev`
-3. Build production bundle: `npm run build`
-4. Run tests: `npm test`
+2. Run app in dev mode: `npm run dev`
+3. Run full quality gates: `npm run lint && npm run typecheck && npm run test && npm run build`
+
+## Packages
+
+- Library: [`packages/exr-reader`](./packages/exr-reader)
+- Demo app: [`apps/exr-lab`](./apps/exr-lab)
