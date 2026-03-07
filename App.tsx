@@ -832,19 +832,6 @@ export default function App() {
     setRendererFallbackReason(selection.fallbackReason || null);
     setRendererEpoch(prev => prev + 1);
 
-    handleLog({
-      id: `renderer-selection-${Date.now()}`,
-      stepId: 'renderer',
-      title: 'Renderer Selected',
-      status: selection.backend === 'webgl2' ? LogStatus.Ok : LogStatus.Warn,
-      ms: 0,
-      metrics: [
-        { label: 'Requested', value: rendererPreference },
-        { label: 'Active', value: selection.backend },
-      ],
-      description: selection.fallbackReason,
-    });
-
     return () => {
       rendererRef.current?.dispose();
       rendererRef.current = null;
