@@ -1,13 +1,13 @@
-import { unzlibSync } from 'fflate';
 import { COMPRESSION_NAMES } from '../shared/constants';
 import { ExrError } from '../shared/errors';
 import { ExrEvent, ExrEventCallback } from '../shared/events';
 import { float16ToFloat32 } from '../shared/half';
-import { decodePizBlock } from './piz';
-import { decodeDwaBlock } from './dwa';
-import { decodeB44Block } from './b44';
-import { decodeRleBlock } from './rle';
-import { decodePxr24Block } from './pxr24';
+import {
+  getReadCompressionHandler,
+  getSupportedReadCompressionText,
+  ZipDecodeScratch,
+} from './compression/handlers';
+import { getScanlineLinesPerBlock } from './compression/scanline';
 import {
   DecodeExrPartOptions,
   DecodedChannel,
@@ -27,49 +27,6 @@ function nowMs(): number {
 
 function emit(onEvent: ExrEventCallback | undefined, event: ExrEvent) {
   onEvent?.(event);
-}
-
-function getScanlineLinesPerBlock(compression: number): number {
-  switch (compression) {
-    case 0:
-    case 1:
-    case 2:
-      return 1;
-    case 3:
-    case 5:
-      return 16;
-    case 4:
-    case 6:
-    case 7:
-    case 8:
-      return 32;
-    case 9:
-      return 256;
-    default:
-      return 1;
-  }
-}
-
-function undoZipPredictorAndInterleave(data: Uint8Array, output: Uint8Array): Uint8Array {
-  const length = data.length;
-  if (length === 0) return data;
-
-  const half = (length + 1) >> 1;
-
-  let predicted = data[0];
-  output[0] = predicted;
-
-  for (let i = 1; i < half; i++) {
-    predicted = (predicted + data[i] - 128) & 0xff;
-    output[i << 1] = predicted;
-  }
-
-  for (let i = half; i < length; i++) {
-    predicted = (predicted + data[i] - 128) & 0xff;
-    output[((i - half) << 1) + 1] = predicted;
-  }
-
-  return output;
 }
 
 function modulo(value: number, base: number): number {
@@ -111,161 +68,6 @@ function toNumberOffset(low: number, high: number): number {
 
   return Number(combined);
 }
-
-interface CompressionDecodeContext {
-  buffer: ArrayBuffer;
-  dataPtr: number;
-  dataSize: number;
-  expectedUncompressedSize: number;
-  part: ExrPart;
-  partId: number;
-  chunkIndex: number;
-  chunkY: number;
-  linesInChunk: number;
-  zipScratch?: ZipDecodeScratch;
-}
-
-interface CompressionHandler {
-  compressionId: number;
-  name: string;
-  linesPerBlock: number;
-  decodeBlock: (context: CompressionDecodeContext) => Uint8Array;
-}
-
-interface ZipDecodeScratch {
-  inflate: Uint8Array;
-  output: Uint8Array;
-}
-
-function decodeZipStyleBlock(context: CompressionDecodeContext): Uint8Array {
-  try {
-    const compressed = new Uint8Array(context.buffer, context.dataPtr, context.dataSize);
-    let raw: Uint8Array;
-
-    if (context.expectedUncompressedSize > 0 && context.zipScratch) {
-      if (context.zipScratch.inflate.byteLength < context.expectedUncompressedSize) {
-        context.zipScratch.inflate = new Uint8Array(context.expectedUncompressedSize);
-      }
-
-      const inflateOut = context.zipScratch.inflate.subarray(0, context.expectedUncompressedSize);
-      raw = unzlibSync(compressed, { out: inflateOut });
-    } else if (context.expectedUncompressedSize > 0) {
-      raw = unzlibSync(compressed, { out: new Uint8Array(context.expectedUncompressedSize) });
-    } else {
-      raw = unzlibSync(compressed);
-    }
-
-    if (context.zipScratch) {
-      if (context.zipScratch.output.byteLength < raw.byteLength) {
-        context.zipScratch.output = new Uint8Array(raw.byteLength);
-      }
-
-      const output = context.zipScratch.output.subarray(0, raw.byteLength);
-      return undoZipPredictorAndInterleave(raw, output);
-    }
-
-    return undoZipPredictorAndInterleave(raw, new Uint8Array(raw.byteLength));
-  } catch {
-    throw new ExrError('DECOMPRESSION_FAILED', 'Failed to decompress ZIP/ZIPS chunk.', {
-      partId: context.partId,
-      chunkIndex: context.chunkIndex,
-      size: context.dataSize,
-    });
-  }
-}
-
-const SUPPORTED_COMPRESSION_HANDLERS = new Map<number, CompressionHandler>([
-  [
-    0,
-    {
-      compressionId: 0,
-      name: COMPRESSION_NAMES[0],
-      linesPerBlock: 1,
-      decodeBlock: ({ buffer, dataPtr, dataSize }) => new Uint8Array(buffer, dataPtr, dataSize),
-    },
-  ],
-  [
-    1,
-    {
-      compressionId: 1,
-      name: COMPRESSION_NAMES[1],
-      linesPerBlock: 1,
-      decodeBlock: decodeRleBlock,
-    },
-  ],
-  [
-    2,
-    {
-      compressionId: 2,
-      name: COMPRESSION_NAMES[2],
-      linesPerBlock: 1,
-      decodeBlock: decodeZipStyleBlock,
-    },
-  ],
-  [
-    3,
-    {
-      compressionId: 3,
-      name: COMPRESSION_NAMES[3],
-      linesPerBlock: 16,
-      decodeBlock: decodeZipStyleBlock,
-    },
-  ],
-  [
-    4,
-    {
-      compressionId: 4,
-      name: COMPRESSION_NAMES[4],
-      linesPerBlock: 32,
-      decodeBlock: decodePizBlock,
-    },
-  ],
-  [
-    5,
-    {
-      compressionId: 5,
-      name: COMPRESSION_NAMES[5],
-      linesPerBlock: 16,
-      decodeBlock: decodePxr24Block,
-    },
-  ],
-  [
-    6,
-    {
-      compressionId: 6,
-      name: COMPRESSION_NAMES[6],
-      linesPerBlock: 32,
-      decodeBlock: decodeB44Block,
-    },
-  ],
-  [
-    7,
-    {
-      compressionId: 7,
-      name: COMPRESSION_NAMES[7],
-      linesPerBlock: 32,
-      decodeBlock: decodeB44Block,
-    },
-  ],
-  [
-    8,
-    {
-      compressionId: 8,
-      name: COMPRESSION_NAMES[8],
-      linesPerBlock: 32,
-      decodeBlock: decodeDwaBlock,
-    },
-  ],
-  [
-    9,
-    {
-      compressionId: 9,
-      name: COMPRESSION_NAMES[9],
-      linesPerBlock: 256,
-      decodeBlock: decodeDwaBlock,
-    },
-  ],
-]);
 
 interface ChannelDecodeMeta {
   channel: ExrChannel;
@@ -421,14 +223,11 @@ export function decodeExrPart(
   }
 
   const compression = part.compression ?? 0;
-  const compressionHandler = SUPPORTED_COMPRESSION_HANDLERS.get(compression);
+  const compressionHandler = getReadCompressionHandler(compression);
   if (!compressionHandler) {
-    const supported = Array.from(SUPPORTED_COMPRESSION_HANDLERS.values())
-      .map((handler) => handler.name)
-      .join(', ');
     throw new ExrError(
       'UNSUPPORTED_COMPRESSION',
-      `Unsupported compression. Supported: ${supported}.`,
+      `Unsupported compression. Supported: ${getSupportedReadCompressionText()}.`,
       {
         partId: options.partId,
         compression,

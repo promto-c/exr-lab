@@ -1,5 +1,5 @@
-import { ExrError } from '../shared/errors';
-import { ExrPart } from '../shared/types';
+import { ExrError } from '../../shared/errors';
+import { ExrPart } from '../../shared/types';
 
 export interface RleDecodeContext {
   buffer: ArrayBuffer;

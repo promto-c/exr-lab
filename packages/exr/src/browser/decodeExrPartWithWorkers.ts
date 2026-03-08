@@ -1,4 +1,5 @@
 import { decodeExrPart } from '../reader/decodeExrPart';
+import { getScanlineLinesPerBlock } from '../reader/compression/scanline';
 import { toArrayBuffer } from '../shared/binary';
 import { DecodeExrPartOptions, DecodedPart, ExrPart, ExrStructure } from '../shared/types';
 
@@ -93,27 +94,6 @@ function clamp(value: number, min: number, max: number): number {
   if (value < min) return min;
   if (value > max) return max;
   return value;
-}
-
-function getScanlineLinesPerBlock(compression: number): number {
-  switch (compression) {
-    case 0:
-    case 1:
-    case 2:
-      return 1;
-    case 3:
-    case 5:
-      return 16;
-    case 4:
-    case 6:
-    case 7:
-    case 8:
-      return 32;
-    case 9:
-      return 256;
-    default:
-      return 1;
-  }
 }
 
 function modulo(value: number, base: number): number {

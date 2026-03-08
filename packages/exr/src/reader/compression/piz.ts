@@ -1,5 +1,5 @@
-import { ExrError } from '../shared/errors';
-import { ExrPart } from '../shared/types';
+import { ExrError } from '../../shared/errors';
+import { ExrPart } from '../../shared/types';
 
 const USHORT_RANGE = 1 << 16;
 const BITMAP_SIZE = USHORT_RANGE >> 3;
