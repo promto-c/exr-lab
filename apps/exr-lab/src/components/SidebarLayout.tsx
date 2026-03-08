@@ -31,36 +31,6 @@ interface SidebarLayoutProps {
   splitterSize?: number;
 }
 
-// Hook to manage exclusive panel collapse on mobile
-//
-// This helper was originally used by the app to keep only a single pane expanded
-// at a time.  SidebarLayout now implements that behaviour internally, so callers
-// shouldn't need this anymore.  It remains exported for backwards compatibility
-// or for consumers that render multiple layouts independently.
-export const useMobileExclusiveCollapse = (
-  panels: Array<{ id: string; setState: (collapsed: boolean) => void }>,
-  isMobile: boolean,
-) => {
-  return React.useCallback(
-    (panelId: string, collapsed: boolean) => {
-      const panel = panels.find((p) => p.id === panelId);
-      if (!panel) return;
-
-      if (isMobile && !collapsed) {
-        // Expanding on mobile: collapse all others
-        panels.forEach((p) => {
-          if (p.id !== panelId) {
-            p.setState(true);
-          }
-        });
-      }
-      // Always apply the change for the clicked panel
-      panel.setState(collapsed);
-    },
-    [panels, isMobile],
-  );
-};
-
 type DragState = {
   pointerId: number;
   splitterIndex: number;
