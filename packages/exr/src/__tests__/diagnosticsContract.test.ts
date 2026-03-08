@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EXR_EVENT_CODES, parseExr, readExr } from '../index';
+import { EXR_EVENT_CODES, parseExr, readExr, writeExr } from '../index';
 
 function toArrayBuffer(buffer: Buffer): ArrayBuffer {
   const output = new Uint8Array(buffer.byteLength);
@@ -13,6 +13,7 @@ describe('diagnostics contract', () => {
   it('exposes a stable event code catalog', () => {
     expect(EXR_EVENT_CODES).toContain('parse.complete');
     expect(EXR_EVENT_CODES).toContain('decode.complete');
+    expect(EXR_EVENT_CODES).toContain('encode.complete');
   });
 
   it('emits only documented event codes during parse/decode', () => {
@@ -27,6 +28,21 @@ describe('diagnostics contract', () => {
     readExr(buffer, {
       onEvent: (event) => codes.add(event.code),
     });
+
+    writeExr(
+      {
+        parts: [
+          {
+            compression: 0,
+            dataWindow: { xMin: 0, yMin: 0, xMax: 0, yMax: 0 },
+            channels: [{ name: 'R', pixelType: 2, data: new Float32Array([0.5]) }],
+          },
+        ],
+      },
+      {
+        onEvent: (event) => codes.add(event.code),
+      },
+    );
 
     for (const code of codes) {
       expect(EXR_EVENT_CODES).toContain(code as (typeof EXR_EVENT_CODES)[number]);

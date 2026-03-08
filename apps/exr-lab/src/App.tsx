@@ -14,7 +14,9 @@ import {
   Sun,
   X,
 } from 'lucide-react';
+import { writeExr } from '@blackboard/exr';
 import { DropZone } from './components/DropZone';
+import { ExportPanel, type ExportRequest } from './components/ExportPanel';
 import { HistogramOverlay } from './components/HistogramOverlay';
 import { LogPanel } from './components/LogPanel';
 import { PixelInspector } from './components/PixelInspector';
@@ -26,6 +28,7 @@ import { PrefetchStrategy } from './core/prefetch';
 import { useCachePrefetch } from './features/cache/useCachePrefetch';
 import { getLayerMapping, guessChannels } from './features/exr/channelMapping';
 import { decodeExrPartToRaw, parseExrStructure } from './features/exr/decodePipeline';
+import { buildExportWriteInput } from './features/exr/exportBuilder';
 import { readFileAsArrayBuffer } from './features/io/readFileAsArrayBuffer';
 import {
   CACHE_STAGE_COLORS,
@@ -63,6 +66,13 @@ type FileLoadOptions = {
   isFrameChange?: boolean;
 };
 
+const EXPORT_COMPRESSION_LABEL: Record<number, string> = {
+  0: 'none',
+  1: 'rle',
+  2: 'zips',
+  3: 'zip',
+};
+
 const DEFAULT_SEQUENCE_FPS = 24;
 const MAX_FRAME_CACHE = 500;
 const DEFAULT_MAX_CACHE_MB = 4096;
@@ -75,6 +85,38 @@ const isTextInputLikeTarget = (target: EventTarget | null): boolean => {
   return Boolean(
     target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]'),
   );
+};
+
+const getLayerPrefixFromChannel = (channelName: string): string => {
+  const parts = channelName.split('.');
+  return parts.length > 1 ? parts.slice(0, -1).join('.') : '(root)';
+};
+
+const sanitizeFileToken = (value: string): string =>
+  value.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_');
+
+const buildExportFileName = (
+  inputFileName: string | null,
+  partId: number,
+  sourceLabel: string,
+  compression: number,
+): string => {
+  const base = sanitizeFileToken((inputFileName ?? 'frame').replace(/\.exr$/i, ''));
+  const source = sanitizeFileToken(sourceLabel);
+  const compressionLabel = EXPORT_COMPRESSION_LABEL[compression] ?? String(compression);
+  return `${base}.part${partId}.${source}.${compressionLabel}.exr`;
+};
+
+const downloadArrayBufferAsFile = (bytes: Uint8Array, fileName: string): void => {
+  const blob = new Blob([bytes], { type: 'image/x-exr' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 };
 
 export default function App() {
@@ -109,7 +151,10 @@ export default function App() {
     b: '',
     a: '',
   });
+  const [selectedLayerPrefix, setSelectedLayerPrefix] = React.useState<string | null>(null);
+  const [selectedChannelName, setSelectedChannelName] = React.useState<string | null>(null);
   const [viewMode, setViewMode] = React.useState<ViewMode>('rgb');
+  const [isExporting, setIsExporting] = React.useState(false);
 
   // View Settings
   const [exposure, setExposure] = React.useState(0);
@@ -579,6 +624,8 @@ export default function App() {
       setStructure(null);
       setSelectedPartId(null);
       setRawPixelData(null);
+      setSelectedLayerPrefix(null);
+      setSelectedChannelName(null);
       setViewMode('rgb');
       setIsProcessing(true);
     }
@@ -641,6 +688,8 @@ export default function App() {
         if (result.parts.length > 0) {
           setSelectedPartId(result.parts[0].id);
           setChannelMapping(guessChannels(result.parts[0].channels));
+          setSelectedLayerPrefix(null);
+          setSelectedChannelName(null);
         }
       }
     } catch (error: unknown) {
@@ -839,6 +888,8 @@ export default function App() {
       // render effect replaces them, which avoids a flash when switching parts
       setInspectCursor(null);
       setSelectedPartId(partId);
+      setSelectedLayerPrefix(null);
+      setSelectedChannelName(null);
     }
     if (structure) {
       // Automatically guess default channels when switching parts explicitly
@@ -972,6 +1023,8 @@ export default function App() {
     if (part) {
       const newMapping = getLayerMapping(part.channels, layerPrefix);
       setChannelMapping(newMapping);
+      setSelectedLayerPrefix(layerPrefix);
+      setSelectedChannelName(null);
     }
     if (isMobile) setIsSidebarOpen(false);
   };
@@ -991,7 +1044,62 @@ export default function App() {
       b: channelName,
       a: '',
     });
+    setSelectedChannelName(channelName);
+    setSelectedLayerPrefix(getLayerPrefixFromChannel(channelName));
     if (isMobile) setIsSidebarOpen(false);
+  };
+
+  const handleExportRequest = (request: ExportRequest) => {
+    if (!selectedPart || !rawPixelData || selectedPartId === null) {
+      return;
+    }
+
+    setIsExporting(true);
+
+    try {
+      const built = buildExportWriteInput({
+        part: selectedPart,
+        raw: rawPixelData,
+        scope: request.scope,
+        compression: request.compression,
+        layerPrefix: request.layerPrefix,
+        channelName: request.channelName,
+        displayMapping,
+        alphaChannelName: channelMapping.a || undefined,
+      });
+
+      const encoded = writeExr(built.writeInput, {
+        onEvent: (event) => handleLog(mapExrEventToLogEntry(event)),
+      });
+
+      const downloadName = buildExportFileName(
+        fileName,
+        selectedPartId,
+        built.sourceLabel,
+        request.compression,
+      );
+      downloadArrayBufferAsFile(encoded, downloadName);
+
+      handleLog({
+        id: `export-ok-${Date.now()}`,
+        stepId: 'encode.export',
+        title: 'EXR Exported',
+        status: LogStatus.Ok,
+        ms: 0,
+        metrics: [
+          { label: 'File', value: downloadName },
+          { label: 'Part', value: selectedPartId },
+          { label: 'Channels', value: built.exportedChannelNames.length },
+          { label: 'Compression', value: request.compression },
+          { label: 'Bytes', value: encoded.byteLength },
+        ],
+        description: `Channels: ${built.exportedChannelNames.join(', ')}`,
+      });
+    } catch (error: unknown) {
+      handleLog(mapExrErrorToLogEntry(error, 'encode.export'));
+    } finally {
+      setIsExporting(false);
+    }
   };
   const handleCacheLimitChange = (value: number) => {
     const next = clamp(Math.round(value), CACHE_MB_MIN, CACHE_MB_MAX);
@@ -1124,6 +1232,21 @@ export default function App() {
           onSelectChannel={handleSelectChannel}
           selectedPartId={selectedPartId}
           onOpenFile={() => fileInputRef.current?.click()}
+        />
+      ),
+    },
+    {
+      id: 'export',
+      initialRatio: 0.2,
+      minSize: 130,
+      content: (
+        <ExportPanel
+          part={selectedPart}
+          hasRawData={Boolean(rawPixelData)}
+          isExporting={isExporting}
+          defaultLayerPrefix={selectedLayerPrefix}
+          defaultChannelName={selectedChannelName ?? displayMapping.r}
+          onExport={handleExportRequest}
         />
       ),
     },
@@ -1476,6 +1599,9 @@ export default function App() {
                     </li>
                     <li>
                       Use <strong>Open Folder</strong> to bind EXR sequences.
+                    </li>
+                    <li>
+                      Use <strong>Export</strong> panel to write part/layer/channel/view EXR.
                     </li>
                   </ul>
                 </div>

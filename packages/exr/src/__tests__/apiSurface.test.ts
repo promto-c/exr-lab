@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { decodeExrPart, parseExr, parseExrStructure, readExr } from '../index';
+import { decodeExrPart, parseExr, parseExrStructure, readExr, writeExr } from '../index';
 
 function toArrayBuffer(buffer: Buffer): ArrayBuffer {
   const output = new Uint8Array(buffer.byteLength);
@@ -32,5 +32,21 @@ describe('public API surface', () => {
     expect(result.structure.parts.length).toBeGreaterThan(0);
     expect(result.part.width).toBeGreaterThan(0);
     expect(result.part.height).toBeGreaterThan(0);
+  });
+
+  it('provides writeExr convenience API', () => {
+    const encoded = writeExr({
+      parts: [
+        {
+          compression: 0,
+          dataWindow: { xMin: 0, yMin: 0, xMax: 1, yMax: 1 },
+          channels: [{ name: 'R', pixelType: 2, data: new Float32Array([0, 1, 2, 3]) }],
+        },
+      ],
+    });
+
+    const structure = parseExrStructure(encoded);
+    const decoded = decodeExrPart(encoded, structure, { partId: 0 });
+    expect(Array.from(decoded.channels.R.data)).toEqual([0, 1, 2, 3]);
   });
 });

@@ -63,3 +63,27 @@ export interface DecodedPart {
   height: number;
   channels: Record<string, DecodedChannel>;
 }
+
+export interface WriteExrChannelInput {
+  name: string;
+  pixelType: ExrPixelType | number;
+  data: Float32Array;
+  pLinear?: number;
+  xSampling?: number;
+  ySampling?: number;
+}
+
+export interface WriteExrPartInput {
+  channels: WriteExrChannelInput[];
+  compression: ExrCompression | number;
+  dataWindow: ExrWindow;
+  displayWindow?: ExrWindow;
+  name?: string;
+  type?: string;
+}
+
+export interface WriteExrInput {
+  parts: WriteExrPartInput[];
+}
+
+export type WriteExrOptions = EventCapableOptions;

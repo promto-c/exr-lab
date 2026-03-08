@@ -5,3 +5,4 @@ export * from './shared/binary';
 export * from './reader/parseExrStructure';
 export * from './reader/decodeExrPart';
 export * from './reader/readExr';
+export * from './writer/writeExr';

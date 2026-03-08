@@ -11,7 +11,7 @@ npm install @blackboard/exr
 ## Core API
 
 ```ts
-import { parseExr, decodeExrPart, readExr } from '@blackboard/exr';
+import { parseExr, decodeExrPart, readExr, writeExr } from '@blackboard/exr';
 
 const buffer = await fetch('/image.exr').then((r) => r.arrayBuffer());
 const structure = parseExr(buffer);
@@ -19,6 +19,17 @@ const decoded = decodeExrPart(buffer, structure, { partId: structure.parts[0].id
 
 // Convenience parse+decode in one call
 const result = readExr(buffer);
+
+// Encode scanline EXR
+const encoded = writeExr({
+  parts: [
+    {
+      compression: 3, // ZIP
+      dataWindow: { xMin: 0, yMin: 0, xMax: 1, yMax: 1 },
+      channels: [{ name: 'R', pixelType: 2, data: new Float32Array([0, 1, 2, 3]) }],
+    },
+  ],
+});
 ```
 
 `decodeExrPart` returns sampled-native channel planes with sampling metadata.
@@ -39,3 +50,9 @@ import {
 
 - Typed failures via `ExrError` and `ExrErrorCode`.
 - Structured progress events via `onEvent` callbacks (`ExrEvent`, `ExrEventCode`).
+
+## Writer Support (Phase 1)
+
+- Scanline single-part and multipart writing.
+- Compression: `NO_COMPRESSION`, `RLE_COMPRESSION`, `ZIPS_COMPRESSION`, `ZIP_COMPRESSION`.
+- Pixel types: `UINT`, `HALF`, `FLOAT`.

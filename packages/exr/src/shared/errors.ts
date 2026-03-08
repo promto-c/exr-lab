@@ -9,7 +9,10 @@ export type ExrErrorCode =
   | 'MISSING_DATA_WINDOW'
   | 'MALFORMED_OFFSET_TABLE'
   | 'MALFORMED_CHUNK'
-  | 'DECOMPRESSION_FAILED';
+  | 'DECOMPRESSION_FAILED'
+  | 'INVALID_WRITE_INPUT'
+  | 'UNSUPPORTED_WRITE_COMPRESSION'
+  | 'ENCODING_FAILED';
 
 export class ExrError extends Error {
   public readonly code: ExrErrorCode;

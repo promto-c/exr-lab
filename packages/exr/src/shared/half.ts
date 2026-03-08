@@ -56,3 +56,28 @@ const HALF_TO_FLOAT_TABLE = createHalfToFloatTable();
 export function float16ToFloat32(h: number): number {
   return HALF_TO_FLOAT_TABLE[h & 0xffff];
 }
+
+export function float32ToFloat16(value: number): number {
+  if (Object.is(value, 0)) return 0;
+
+  const floatView = new Float32Array(1);
+  const intView = new Uint32Array(floatView.buffer);
+  floatView[0] = value;
+
+  const bits = intView[0];
+  const sign = (bits >>> 16) & 0x8000;
+  const exponent = ((bits >>> 23) & 0xff) - 127 + 15;
+  const mantissa = bits & 0x7fffff;
+
+  if (exponent <= 0) {
+    if (exponent < -10) return sign;
+    const shiftedMantissa = (mantissa | 0x800000) >> (1 - exponent);
+    return sign | ((shiftedMantissa + 0x1000) >> 13);
+  }
+
+  if (exponent >= 0x1f) {
+    return sign | 0x7c00;
+  }
+
+  return sign | (exponent << 10) | ((mantissa + 0x1000) >> 13);
+}
