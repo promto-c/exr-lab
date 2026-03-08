@@ -17,3 +17,8 @@ Prerequisites: Node.js 20+
 
 - Library: [`packages/exr`](./packages/exr)
 - Demo app: [`apps/exr-lab`](./apps/exr-lab)
+
+## Licensing
+
+- Workspace license: [`LICENSE`](./LICENSE)
+- Third-party runtime dependency notices: [`THIRD_PARTY_LICENSES.md`](./THIRD_PARTY_LICENSES.md)
