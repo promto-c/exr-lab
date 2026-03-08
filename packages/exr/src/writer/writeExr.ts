@@ -1,48 +1,20 @@
-import { zlibSync } from 'fflate';
 import { EXR_MAGIC } from '../shared/constants';
 import { ExrError } from '../shared/errors';
 import { ExrEvent, ExrEventCallback } from '../shared/events';
 import { float32ToFloat16 } from '../shared/half';
 import { ExrWindow, WriteExrChannelInput, WriteExrInput, WriteExrOptions } from '../shared/types';
+import { ChannelWriteMeta, PartWriteMeta } from './meta';
+import {
+  getWriteCompressionHandler,
+  SUPPORTED_WRITE_COMPRESSION_TEXT,
+} from './compression/handlers';
+import { countSamplesInRange, firstSampleCoordinate, isSampledCoordinate } from './sampling';
 
 const EXR_VERSION = 2;
 const EXR_MULTIPART_FLAG = 0x10;
 
-const NO_COMPRESSION = 0;
-const RLE_COMPRESSION = 1;
-const ZIPS_COMPRESSION = 2;
-const ZIP_COMPRESSION = 3;
-
 const UINT32_MAX = 4294967295;
 const UTF8_ENCODER = new TextEncoder();
-
-interface ChannelWriteMeta {
-  name: string;
-  pixelType: 0 | 1 | 2;
-  pLinear: number;
-  xSampling: number;
-  ySampling: number;
-  sampleOriginX: number;
-  sampleOriginY: number;
-  sampledWidth: number;
-  sampledHeight: number;
-  rowByteLength: number;
-  data: Float32Array;
-}
-
-interface PartWriteMeta {
-  id: number;
-  compression: number;
-  dataWindow: ExrWindow;
-  displayWindow: ExrWindow;
-  name: string;
-  type: string;
-  channels: ChannelWriteMeta[];
-  linesPerBlock: number;
-  chunkCount: number;
-  includeNameAttribute: boolean;
-  includeTypeAttribute: boolean;
-}
 
 class ByteWriter {
   private readonly bytes: number[] = [];
@@ -118,31 +90,11 @@ function emit(onEvent: ExrEventCallback | undefined, event: ExrEvent): void {
   onEvent?.(event);
 }
 
-function modulo(value: number, base: number): number {
-  const result = value % base;
-  return result < 0 ? result + base : result;
-}
-
-function firstSampleCoordinate(min: number, sampling: number): number {
-  if (sampling <= 1) return min;
-  const remainder = modulo(min, sampling);
-  return remainder === 0 ? min : min + (sampling - remainder);
-}
-
-function countSamplesInRange(min: number, max: number, sampling: number): number {
-  if (sampling <= 0 || max < min) return 0;
-  const first = firstSampleCoordinate(min, sampling);
-  if (first > max) return 0;
-  return Math.floor((max - first) / sampling) + 1;
-}
-
-function isSampledCoordinate(value: number, firstSample: number, sampling: number): boolean {
-  if (sampling <= 1) return true;
-  if (value < firstSample) return false;
-  return (value - firstSample) % sampling === 0;
-}
-
-function ensureFiniteInteger(value: number, field: string, details: Record<string, number | string>) {
+function ensureFiniteInteger(
+  value: number,
+  field: string,
+  details: Record<string, number | string>,
+): void {
   if (!Number.isFinite(value) || !Number.isInteger(value)) {
     throw new ExrError('INVALID_WRITE_INPUT', `Expected integer value for ${field}.`, details);
   }
@@ -167,21 +119,12 @@ function ensureWindow(window: ExrWindow, field: string, partId: number): ExrWind
   return window;
 }
 
-function getLinesPerBlock(compression: number): number {
-  switch (compression) {
-    case NO_COMPRESSION:
-    case RLE_COMPRESSION:
-    case ZIPS_COMPRESSION:
-      return 1;
-    case ZIP_COMPRESSION:
-      return 16;
-    default:
-      throw new ExrError(
-        'UNSUPPORTED_WRITE_COMPRESSION',
-        'Writer currently supports NO/RLE/ZIPS/ZIP compression only.',
-        { compression },
-      );
-  }
+function unsupportedCompressionError(compression: number): ExrError {
+  return new ExrError(
+    'UNSUPPORTED_WRITE_COMPRESSION',
+    `Writer currently supports ${SUPPORTED_WRITE_COMPRESSION_TEXT} compression only.`,
+    { compression },
+  );
 }
 
 function normalizeChannel(
@@ -266,7 +209,12 @@ function normalizeParts(input: WriteExrInput): PartWriteMeta[] {
     }
 
     const compression = part.compression;
-    const linesPerBlock = getLinesPerBlock(compression);
+    const compressionHandler = getWriteCompressionHandler(compression);
+    if (!compressionHandler) {
+      throw unsupportedCompressionError(compression);
+    }
+
+    const linesPerBlock = compressionHandler.linesPerBlock;
     const dataWindow = ensureWindow(part.dataWindow, 'dataWindow', index);
     const displayWindow = ensureWindow(part.displayWindow ?? dataWindow, 'displayWindow', index);
     const channels = part.channels.map((channel) => normalizeChannel(channel, index, dataWindow));
@@ -436,112 +384,26 @@ function buildRawChunk(part: PartWriteMeta, chunkY: number): Uint8Array {
   return raw;
 }
 
-function interleave(data: Uint8Array): Uint8Array {
-  const length = data.length;
-  const half = Math.floor((length + 1) / 2);
-  const out = new Uint8Array(length);
-
-  let even = 0;
-  let odd = half;
-  for (let i = 0; i < length; i++) {
-    if ((i & 1) === 0) {
-      out[even++] = data[i];
-    } else {
-      out[odd++] = data[i];
-    }
-  }
-
-  return out;
-}
-
-function applyPredictor(data: Uint8Array): Uint8Array {
-  if (data.length === 0) return data;
-  const out = new Uint8Array(data.length);
-  out[0] = data[0];
-  for (let i = 1; i < data.length; i++) {
-    out[i] = (data[i] - data[i - 1] + 128) & 0xff;
-  }
-  return out;
-}
-
-function rleCompress(data: Uint8Array): Uint8Array {
-  const out: number[] = [];
-  const end = data.length;
-  let runs = 0;
-  let rune = runs + 1;
-
-  while (runs < end) {
-    let count = 0;
-    while (rune < end && data[runs] === data[rune] && count < 127) {
-      rune++;
-      count++;
-    }
-
-    if (count >= 2) {
-      out.push(count & 0xff);
-      out.push(data[runs]);
-      runs = rune;
-    } else {
-      count++;
-      while (
-        rune < end &&
-        (rune + 1 >= end ||
-          data[rune] !== data[rune + 1] ||
-          rune + 2 >= end ||
-          data[rune + 1] !== data[rune + 2]) &&
-        count < 127
-      ) {
-        count++;
-        rune++;
-      }
-
-      out.push(-count & 0xff);
-      while (runs < rune) {
-        out.push(data[runs++]);
-      }
-    }
-
-    rune++;
-  }
-
-  return Uint8Array.from(out);
-}
-
 function encodeChunk(
   raw: Uint8Array,
-  compression: number,
-  partId: number,
+  part: PartWriteMeta,
+  chunkY: number,
   chunkIndex: number,
 ): Uint8Array {
-  if (compression === NO_COMPRESSION) {
-    return raw;
+  const compressionHandler = getWriteCompressionHandler(part.compression);
+  if (!compressionHandler) {
+    throw unsupportedCompressionError(part.compression);
   }
 
   try {
-    if (compression === RLE_COMPRESSION) {
-      const encoded = rleCompress(applyPredictor(interleave(raw)));
-      return encoded.byteLength >= raw.byteLength ? raw : encoded;
-    }
-
-    if (compression === ZIPS_COMPRESSION || compression === ZIP_COMPRESSION) {
-      const encoded = zlibSync(applyPredictor(interleave(raw)));
-      return encoded.byteLength >= raw.byteLength ? raw : encoded;
-    }
+    return compressionHandler.encodeChunk(raw, part, chunkY);
   } catch {
     throw new ExrError('ENCODING_FAILED', 'Failed to compress EXR chunk payload.', {
-      partId,
+      partId: part.id,
       chunkIndex,
-      compression,
+      compression: part.compression,
     });
   }
-
-  throw new ExrError(
-    'UNSUPPORTED_WRITE_COMPRESSION',
-    'Writer currently supports NO/RLE/ZIPS/ZIP compression only.',
-    {
-      compression,
-    },
-  );
 }
 
 export function writeExr(input: WriteExrInput, options: WriteExrOptions = {}): Uint8Array {
@@ -594,7 +456,7 @@ export function writeExr(input: WriteExrInput, options: WriteExrOptions = {}): U
 
       const chunkY = part.dataWindow.yMin + chunkIndex * part.linesPerBlock;
       const raw = buildRawChunk(part, chunkY);
-      const encoded = encodeChunk(raw, part.compression, part.id, chunkIndex);
+      const encoded = encodeChunk(raw, part, chunkY, chunkIndex);
 
       if (isMultipart) {
         writer.writeInt32(part.id);

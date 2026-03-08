@@ -33,6 +33,10 @@ const COMPRESSION_OPTIONS: Array<{ value: ExportCompression; label: string }> = 
   { value: 1, label: 'RLE (1)' },
   { value: 2, label: 'ZIPS (2)' },
   { value: 3, label: 'ZIP (3)' },
+  { value: 4, label: 'PIZ (4)' },
+  { value: 5, label: 'PXR24 (5)' },
+  { value: 6, label: 'B44 (6)' },
+  { value: 7, label: 'B44A (7)' },
 ];
 
 const SCOPE_OPTIONS: Array<{ value: ExportSourceMode; label: string }> = [
@@ -179,7 +183,7 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
             disabled={!canExport}
             className="w-full rounded-md border border-teal-700/70 bg-teal-900/30 px-3 py-2 text-xs text-teal-200 hover:bg-teal-800/40 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            {isExporting ? 'Exporting EXR…' : 'Export EXR'}
+            {isExporting ? 'Exporting EXR...' : 'Export EXR'}
           </button>
 
           {!hasRawData && (

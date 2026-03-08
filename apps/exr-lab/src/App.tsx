@@ -71,6 +71,10 @@ const EXPORT_COMPRESSION_LABEL: Record<number, string> = {
   1: 'rle',
   2: 'zips',
   3: 'zip',
+  4: 'piz',
+  5: 'pxr24',
+  6: 'b44',
+  7: 'b44a',
 };
 
 const DEFAULT_SEQUENCE_FPS = 24;

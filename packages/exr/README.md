@@ -51,8 +51,8 @@ import {
 - Typed failures via `ExrError` and `ExrErrorCode`.
 - Structured progress events via `onEvent` callbacks (`ExrEvent`, `ExrEventCode`).
 
-## Writer Support (Phase 1)
+## Writer Support (Phase 4)
 
 - Scanline single-part and multipart writing.
-- Compression: `NO_COMPRESSION`, `RLE_COMPRESSION`, `ZIPS_COMPRESSION`, `ZIP_COMPRESSION`.
+- Compression: `NO_COMPRESSION`, `RLE_COMPRESSION`, `ZIPS_COMPRESSION`, `ZIP_COMPRESSION`, `PIZ_COMPRESSION`, `PXR24_COMPRESSION`, `B44_COMPRESSION`, `B44A_COMPRESSION`.
 - Pixel types: `UINT`, `HALF`, `FLOAT`.

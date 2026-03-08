@@ -8,9 +8,66 @@ function expectCloseArray(actual: Float32Array, expected: number[], epsilon = 1e
   }
 }
 
+function expectRelativeClose(actual: number, expected: number, relativeTolerance: number, absoluteTolerance = 2e-2) {
+  const delta = Math.abs(actual - expected);
+  const allowed = Math.max(absoluteTolerance, Math.abs(expected) * relativeTolerance);
+  expect(delta).toBeLessThanOrEqual(allowed);
+}
+
+function float32ToUint32Bits(value: number): number {
+  const scratch = new DataView(new ArrayBuffer(4));
+  scratch.setFloat32(0, value, true);
+  return scratch.getUint32(0, true);
+}
+
+function uint32BitsToFloat32(value: number): number {
+  const scratch = new DataView(new ArrayBuffer(4));
+  scratch.setUint32(0, value >>> 0, true);
+  return scratch.getFloat32(0, true);
+}
+
+function floatBitsToFloat24Bits(bits: number): number {
+  const sign = bits & 0x80000000;
+  const exponent = bits & 0x7f800000;
+  const mantissa = bits & 0x007fffff;
+
+  let reduced = 0;
+  if (exponent === 0x7f800000) {
+    if (mantissa !== 0) {
+      const shrunkMantissa = mantissa >>> 8;
+      reduced = (exponent >>> 8) | shrunkMantissa | (shrunkMantissa === 0 ? 1 : 0);
+    } else {
+      reduced = exponent >>> 8;
+    }
+  } else {
+    reduced = ((exponent | mantissa) + (mantissa & 0x00000080)) >>> 8;
+    if (reduced >= 0x7f8000) {
+      reduced = (exponent | mantissa) >>> 8;
+    }
+  }
+
+  return ((sign >>> 8) | reduced) >>> 0;
+}
+
+function pxr24QuantizeFloat(value: number): number {
+  const bits = float32ToUint32Bits(value);
+  const pxr24 = floatBitsToFloat24Bits(bits);
+  return uint32BitsToFloat32((pxr24 << 8) >>> 0);
+}
+
+function readFirstChunkDataSize(encoded: Uint8Array, headerEndOffset: number): number {
+  const view = new DataView(encoded.buffer, encoded.byteOffset, encoded.byteLength);
+  const firstOffsetLow = view.getUint32(headerEndOffset, true);
+  const firstOffsetHigh = view.getUint32(headerEndOffset + 4, true);
+  const chunkOffset = firstOffsetHigh * 4294967296 + firstOffsetLow;
+  return view.getInt32(chunkOffset + 4, true);
+}
+
 describe('writeExr', () => {
-  it('roundtrips single-part data across phase-1 compressions', () => {
-    for (const compression of [0, 1, 2, 3]) {
+  it('roundtrips single-part data across supported writer compressions', () => {
+    const sourceR = [0.25, 1.25, 10.25, 11.25];
+
+    for (const compression of [0, 1, 2, 3, 4, 5, 6, 7]) {
       const encoded = writeExr({
         parts: [
           {
@@ -20,7 +77,7 @@ describe('writeExr', () => {
               {
                 name: 'R',
                 pixelType: 2,
-                data: new Float32Array([0.25, 1.25, 10.25, 11.25]),
+                data: new Float32Array(sourceR),
               },
               {
                 name: 'H',
@@ -42,9 +99,135 @@ describe('writeExr', () => {
       expect(structure.parts[0].compression).toBe(compression);
 
       const decoded = decodeExrPart(encoded, structure, { partId: 0 });
-      expectCloseArray(decoded.channels.R.data, [0.25, 1.25, 10.25, 11.25]);
+      expectCloseArray(
+        decoded.channels.R.data,
+        compression === 5 ? sourceR.map((value) => pxr24QuantizeFloat(value)) : sourceR,
+      );
       expectCloseArray(decoded.channels.H.data, [0, 1, 1, 0]);
       expectCloseArray(decoded.channels.U.data, [1, 0, 0, 1]);
+    }
+  });
+
+  it('encodes compressed PIZ chunks when payload is reducible', () => {
+    const source = new Float32Array(16 * 16).fill(0.5);
+    const encoded = writeExr({
+      parts: [
+        {
+          compression: 4,
+          dataWindow: { xMin: 0, yMin: 0, xMax: 15, yMax: 15 },
+          channels: [{ name: 'H', pixelType: 1, data: source }],
+        },
+      ],
+    });
+
+    const structure = parseExrStructure(encoded);
+    const dataSize = readFirstChunkDataSize(encoded, structure.headerEndOffset);
+    expect(dataSize).toBeLessThan(source.length * 2);
+
+    const decoded = decodeExrPart(encoded, structure, { partId: 0 });
+    expectCloseArray(decoded.channels.H.data, Array.from(source));
+  });
+
+  it('roundtrips large PIZ chunks without Huffman bit-count failures', () => {
+    const width = 256;
+    const height = 64;
+    const source = new Float32Array(width * height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        source[y * width + x] = ((x * 13 + y * 7) % 97) / 96;
+      }
+    }
+
+    const encoded = writeExr({
+      parts: [
+        {
+          compression: 4,
+          dataWindow: { xMin: 0, yMin: 0, xMax: width - 1, yMax: height - 1 },
+          channels: [{ name: 'H', pixelType: 1, data: source }],
+        },
+      ],
+    });
+
+    const structure = parseExrStructure(encoded);
+    const decoded = decodeExrPart(encoded, structure, { partId: 0 });
+
+    expect(decoded.channels.H.data.length).toBe(source.length);
+    for (let i = 0; i < source.length; i += 997) {
+      expect(decoded.channels.H.data[i]).toBeCloseTo(source[i], 3);
+    }
+  });
+
+  it('encodes compressed B44 chunks for HALF channels', () => {
+    const source = new Float32Array(16).fill(1);
+    const encoded = writeExr({
+      parts: [
+        {
+          compression: 6,
+          dataWindow: { xMin: 0, yMin: 0, xMax: 3, yMax: 3 },
+          channels: [{ name: 'H', pixelType: 1, data: source }],
+        },
+      ],
+    });
+
+    const structure = parseExrStructure(encoded);
+    const dataSize = readFirstChunkDataSize(encoded, structure.headerEndOffset);
+    expect(dataSize).toBeLessThan(32);
+
+    const decoded = decodeExrPart(encoded, structure, { partId: 0 });
+    expectCloseArray(decoded.channels.H.data, Array.from(source));
+  });
+
+  it('encodes compressed B44A flat chunks for HALF channels', () => {
+    const source = new Float32Array(16).fill(0.5);
+    const encoded = writeExr({
+      parts: [
+        {
+          compression: 7,
+          dataWindow: { xMin: 0, yMin: 0, xMax: 3, yMax: 3 },
+          channels: [{ name: 'H', pixelType: 1, data: source }],
+        },
+      ],
+    });
+
+    const structure = parseExrStructure(encoded);
+    const dataSize = readFirstChunkDataSize(encoded, structure.headerEndOffset);
+    expect(dataSize).toBeLessThan(32);
+
+    const decoded = decodeExrPart(encoded, structure, { partId: 0 });
+    expectCloseArray(decoded.channels.H.data, Array.from(source));
+  });
+
+  it('encodes B44 pLinear HALF blocks through linear-domain mapping', () => {
+    const source = [
+      1, 2, 4, 8,
+      16, 24, 32, 40,
+      3, 6, 12, 18,
+      28, 36, 48, 64,
+    ];
+
+    const encoded = writeExr({
+      parts: [
+        {
+          compression: 6,
+          dataWindow: { xMin: 0, yMin: 0, xMax: 3, yMax: 3 },
+          channels: [
+            {
+              name: 'H',
+              pixelType: 1,
+              pLinear: 1,
+              data: new Float32Array(source),
+            },
+          ],
+        },
+      ],
+    });
+
+    const structure = parseExrStructure(encoded);
+    const decoded = decodeExrPart(encoded, structure, { partId: 0 });
+
+    expect(decoded.channels.H.data.length).toBe(source.length);
+    for (let i = 0; i < source.length; i++) {
+      expectRelativeClose(decoded.channels.H.data[i], source[i], 0.55);
     }
   });
 
@@ -114,7 +297,7 @@ describe('writeExr', () => {
       writeExr({
         parts: [
           {
-            compression: 4,
+            compression: 8,
             dataWindow: { xMin: 0, yMin: 0, xMax: 0, yMax: 0 },
             channels: [{ name: 'R', pixelType: 2, data: new Float32Array([1]) }],
           },
@@ -126,7 +309,7 @@ describe('writeExr', () => {
       writeExr({
         parts: [
           {
-            compression: 4,
+            compression: 8,
             dataWindow: { xMin: 0, yMin: 0, xMax: 0, yMax: 0 },
             channels: [{ name: 'R', pixelType: 2, data: new Float32Array([1]) }],
           },

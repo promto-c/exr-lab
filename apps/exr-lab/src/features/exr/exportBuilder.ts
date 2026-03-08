@@ -2,7 +2,7 @@ import type { ExrChannel, ExrPart, ExrWindow, WriteExrChannelInput, WriteExrInpu
 import type { ChannelMapping, ChannelDecodeInfo, RawDecodeResult } from '../../services/render/types';
 
 export type ExportSourceMode = 'part' | 'layer' | 'channel' | 'view';
-export type ExportCompression = 0 | 1 | 2 | 3;
+export type ExportCompression = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export interface BuildExportWriteInputOptions {
   part: ExrPart;
