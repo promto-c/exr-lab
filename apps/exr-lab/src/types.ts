@@ -1,4 +1,4 @@
-import type { ExrChannel, ExrPart, ExrStructure, ExrWindow } from '@blackboard/exr-reader';
+import type { ExrChannel, ExrPart, ExrStructure, ExrWindow } from '@blackboard/exr';
 
 export enum LogStatus {
   Start = 'start',

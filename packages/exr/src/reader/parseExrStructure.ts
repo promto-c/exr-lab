@@ -1,8 +1,8 @@
-import { ExrError } from './errors';
-import { ExrEvent, ExrEventCallback } from './events';
-import { COMPRESSION_NAMES, EXR_MAGIC } from './constants';
-import { ExrChannel, ExrPart, ExrStructure, ParseExrOptions } from './types';
-import { ExrBinaryInput, toArrayBuffer } from './binary';
+import { ExrError } from '../shared/errors';
+import { ExrEvent, ExrEventCallback } from '../shared/events';
+import { COMPRESSION_NAMES, EXR_MAGIC } from '../shared/constants';
+import { ExrChannel, ExrPart, ExrStructure, ParseExrOptions } from '../shared/types';
+import { ExrBinaryInput, toArrayBuffer } from '../shared/binary';
 
 function nowMs(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();

@@ -1,6 +1,6 @@
 # EXR Lab App
 
-Browser-based OpenEXR reader/viewer demo powered by `@blackboard/exr-reader`.
+Browser-based OpenEXR reader/viewer demo powered by `@blackboard/exr`.
 
 ## Commands
 

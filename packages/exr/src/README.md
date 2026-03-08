@@ -1,4 +1,4 @@
-# EXR Core Library (`core/exr`)
+# EXR Core Library
 
 Framework-agnostic OpenEXR parser and scanline decoder.
 
@@ -14,7 +14,7 @@ This module is designed to be reusable across apps and does not depend on React 
 ## Quick start
 
 ```ts
-import { parseExrStructure, decodeExrPart } from './core/exr';
+import { parseExrStructure, decodeExrPart } from '@blackboard/exr';
 
 const file = await fetch('/image.exr').then((r) => r.arrayBuffer());
 
@@ -28,7 +28,7 @@ console.log(Object.keys(part.channels));
 ## Parse + decode with diagnostics
 
 ```ts
-import { parseExrStructure, decodeExrPart, ExrEvent } from './core/exr';
+import { parseExrStructure, decodeExrPart, ExrEvent } from '@blackboard/exr';
 
 function onEvent(event: ExrEvent) {
   console.log(`[${event.phase}] ${event.level} ${event.code}: ${event.message}`, event.metrics);
@@ -46,7 +46,7 @@ const decoded = decodeExrPart(buffer, structure, {
 ## Error handling
 
 ```ts
-import { parseExrStructure, decodeExrPart, isExrError } from './core/exr';
+import { parseExrStructure, decodeExrPart, isExrError } from '@blackboard/exr';
 
 try {
   const structure = parseExrStructure(buffer);

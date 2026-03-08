@@ -1,5 +1,5 @@
-import { DecodedPart, ExrPart } from '@blackboard/exr-reader';
-import { expandDecodedPartChannels } from '@blackboard/exr-reader/browser';
+import { DecodedPart, ExrPart } from '@blackboard/exr';
+import { expandDecodedPartChannels } from '@blackboard/exr/browser';
 import { RawDecodeResult } from '../../services/render/types';
 
 export function toRawDecodeResult(decoded: DecodedPart, part: ExrPart): RawDecodeResult {

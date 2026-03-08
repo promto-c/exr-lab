@@ -1,5 +1,5 @@
-import { decodeDwaBlock } from '../dwa';
-import type { ExrPart } from '../types';
+import { decodeDwaBlock } from '../reader/dwa';
+import type { ExrPart } from '../shared/types';
 
 interface DwaInitMessage {
   type: 'init';

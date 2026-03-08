@@ -2,7 +2,7 @@
 
 Monorepo for:
 
-- `@blackboard/exr-reader`: reusable OpenEXR parser/decoder library.
+- `@blackboard/exr`: reusable OpenEXR parser/decoder library.
 - `@blackboard/exr-lab`: demo viewer app consuming the library.
 
 ## Quick Start
@@ -15,5 +15,5 @@ Prerequisites: Node.js 20+
 
 ## Packages
 
-- Library: [`packages/exr-reader`](./packages/exr-reader)
+- Library: [`packages/exr`](./packages/exr)
 - Demo app: [`apps/exr-lab`](./apps/exr-lab)

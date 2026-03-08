@@ -1,5 +1,5 @@
-﻿import { describe, expect, it } from 'vitest';
-import type { ExrChannel } from '@blackboard/exr-reader';
+import { describe, expect, it } from 'vitest';
+import type { ExrChannel } from '@blackboard/exr';
 import { getLayerMapping, guessChannels } from '../channelMapping';
 
 const ch = (name: string): ExrChannel => ({

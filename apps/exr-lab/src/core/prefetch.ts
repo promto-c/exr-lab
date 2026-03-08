@@ -27,8 +27,8 @@
  */
 
 import { ExrCache } from './cache';
-import { parseExr } from '@blackboard/exr-reader';
-import { decodeExrPartWithWorkers } from '@blackboard/exr-reader/browser';
+import { parseExr } from '@blackboard/exr';
+import { decodeExrPartWithWorkers } from '@blackboard/exr/browser';
 import { toRawDecodeResult } from '../features/exr/decodeToRaw';
 import type { LogEntry } from '../types';
 

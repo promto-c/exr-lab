@@ -5,7 +5,7 @@
       "path": "./apps/exr-lab"
     },
     {
-      "path": "./packages/exr-reader"
+      "path": "./packages/exr"
     }
   ]
 }

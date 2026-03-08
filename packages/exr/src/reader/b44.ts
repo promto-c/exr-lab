@@ -1,6 +1,6 @@
-import { ExrError } from './errors';
-import { float16ToFloat32 } from './half';
-import { ExrPart } from './types';
+import { ExrError } from '../shared/errors';
+import { float16ToFloat32 } from '../shared/half';
+import { ExrPart } from '../shared/types';
 
 const HALF_VALUES_PER_BLOCK = 16;
 const B44_BLOCK_SIZE = 14;

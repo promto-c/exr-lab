@@ -2,10 +2,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { unzlibSync, zlibSync } from 'fflate';
-import { decodeDwaBlock } from '../dwa';
+import { decodeDwaBlock } from '../reader/dwa';
 import { decodeExrPart, parseExr } from '../index';
 import { decodeExrPartWithWorkers, WorkerFactory } from '../browser';
-import type { ExrPart } from '../types';
+import type { ExrPart } from '../shared/types';
 
 interface ZipWorkerRequest {
   id: number;

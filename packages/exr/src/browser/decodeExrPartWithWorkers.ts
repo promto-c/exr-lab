@@ -1,6 +1,6 @@
-import { decodeExrPart } from '../decodeExrPart';
-import { toArrayBuffer } from '../binary';
-import { DecodeExrPartOptions, DecodedPart, ExrPart, ExrStructure } from '../types';
+import { decodeExrPart } from '../reader/decodeExrPart';
+import { toArrayBuffer } from '../shared/binary';
+import { DecodeExrPartOptions, DecodedPart, ExrPart, ExrStructure } from '../shared/types';
 
 const ZIPS_COMPRESSION = 2;
 const ZIP_COMPRESSION = 3;

@@ -1,4 +1,4 @@
-import { DecodedChannel, DecodedPart, ExrWindow } from '../types';
+import { DecodedChannel, DecodedPart, ExrWindow } from '../shared/types';
 
 function clamp(value: number, min: number, max: number): number {
   if (value < min) return min;

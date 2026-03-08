@@ -97,12 +97,12 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: [
         {
-          find: '@blackboard/exr-reader/browser',
-          replacement: path.resolve(__dirname, '../../packages/exr-reader/src/browser/index.ts'),
+          find: '@blackboard/exr/browser',
+          replacement: path.resolve(__dirname, '../../packages/exr/src/browser/index.ts'),
         },
         {
-          find: '@blackboard/exr-reader',
-          replacement: path.resolve(__dirname, '../../packages/exr-reader/src/index.ts'),
+          find: '@blackboard/exr',
+          replacement: path.resolve(__dirname, '../../packages/exr/src/index.ts'),
         },
         {
           find: '@',

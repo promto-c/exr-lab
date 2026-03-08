@@ -15,7 +15,7 @@
     "lint": "eslint . --ext .ts,.tsx,.mts,.cts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "benchmark": "npm run --workspace @blackboard/exr-reader benchmark",
+    "benchmark": "npm run --workspace @blackboard/exr benchmark",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "changeset publish"

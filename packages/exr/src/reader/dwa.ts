@@ -1,7 +1,7 @@
 import { unzlibSync } from 'fflate';
-import { ExrError } from './errors';
-import { float16ToFloat32 } from './half';
-import { ExrPart } from './types';
+import { ExrError } from '../shared/errors';
+import { float16ToFloat32 } from '../shared/half';
+import { ExrPart } from '../shared/types';
 
 // Adapted from the DWAA/DWAB decode path in three.js EXRLoader.
 

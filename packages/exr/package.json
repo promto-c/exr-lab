@@ -1,5 +1,5 @@
 {
-  "name": "@blackboard/exr-reader",
+  "name": "@blackboard/exr",
   "version": "0.1.0",
   "description": "Production-grade OpenEXR scanline parser/decoder for browser and Node.js",
   "license": "MIT",

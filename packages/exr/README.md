@@ -1,17 +1,17 @@
-# @blackboard/exr-reader
+# @blackboard/exr
 
 Production-grade OpenEXR scanline parser/decoder for browser and Node.js.
 
 ## Install
 
 ```bash
-npm install @blackboard/exr-reader
+npm install @blackboard/exr
 ```
 
 ## Core API
 
 ```ts
-import { parseExr, decodeExrPart, readExr } from '@blackboard/exr-reader';
+import { parseExr, decodeExrPart, readExr } from '@blackboard/exr';
 
 const buffer = await fetch('/image.exr').then((r) => r.arrayBuffer());
 const structure = parseExr(buffer);
@@ -29,7 +29,7 @@ const result = readExr(buffer);
 import {
   decodeExrPartWithWorkers,
   expandDecodedPartChannels,
-} from '@blackboard/exr-reader/browser';
+} from '@blackboard/exr/browser';
 ```
 
 - `decodeExrPartWithWorkers` optionally pre-decodes ZIP/DWA chunks using workers.

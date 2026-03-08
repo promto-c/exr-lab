@@ -1,10 +1,10 @@
-﻿import {
+import {
   parseExr,
   type DecodeExrPartOptions,
   type ExrStructure,
   type ParseExrOptions,
-} from '@blackboard/exr-reader';
-import { decodeExrPartWithWorkers } from '@blackboard/exr-reader/browser';
+} from '@blackboard/exr';
+import { decodeExrPartWithWorkers } from '@blackboard/exr/browser';
 import { toRawDecodeResult } from './decodeToRaw';
 import type { RawDecodeResult } from '../../services/render/types';
 

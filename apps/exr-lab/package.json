@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.worker.json"
   },
   "dependencies": {
-    "@blackboard/exr-reader": "file:../../packages/exr-reader",
+    "@blackboard/exr": "file:../../packages/exr",
     "lucide-react": "^0.563.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",

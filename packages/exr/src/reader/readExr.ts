@@ -6,7 +6,7 @@ import {
   ExrBinaryInput,
   ExrStructure,
   ParseExrOptions,
-} from './types';
+} from '../shared/types';
 
 export interface ReadExrOptions extends ParseExrOptions {
   partId?: number;

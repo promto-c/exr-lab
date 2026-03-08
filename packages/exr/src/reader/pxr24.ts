@@ -1,6 +1,6 @@
 import { unzlibSync } from 'fflate';
-import { ExrError } from './errors';
-import { ExrPart } from './types';
+import { ExrError } from '../shared/errors';
+import { ExrPart } from '../shared/types';
 
 interface Pxr24ChannelLayout {
   pixelType: number;

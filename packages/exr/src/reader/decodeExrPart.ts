@@ -1,8 +1,8 @@
 import { unzlibSync } from 'fflate';
-import { COMPRESSION_NAMES } from './constants';
-import { ExrError } from './errors';
-import { ExrEvent, ExrEventCallback } from './events';
-import { float16ToFloat32 } from './half';
+import { COMPRESSION_NAMES } from '../shared/constants';
+import { ExrError } from '../shared/errors';
+import { ExrEvent, ExrEventCallback } from '../shared/events';
+import { float16ToFloat32 } from '../shared/half';
 import { decodePizBlock } from './piz';
 import { decodeDwaBlock } from './dwa';
 import { decodeB44Block } from './b44';
@@ -15,8 +15,8 @@ import {
   ExrChannel,
   ExrPart,
   ExrStructure,
-} from './types';
-import { ExrBinaryInput, toArrayBuffer } from './binary';
+} from '../shared/types';
+import { ExrBinaryInput, toArrayBuffer } from '../shared/binary';
 
 const UINT32_MAX = 4294967295.0;
 const INV_UINT32_MAX = 1 / UINT32_MAX;
