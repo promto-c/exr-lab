@@ -3,8 +3,8 @@ import {
   type DecodeExrPartOptions,
   type ExrStructure,
   type ParseExrOptions,
-} from '@blackboard/exr';
-import { decodeExrPartWithWorkers } from '@blackboard/exr/browser';
+} from '@bb-studio/exr';
+import { decodeExrPartWithWorkers } from '@bb-studio/exr/browser';
 import { toRawDecodeResult } from './decodeToRaw';
 import type { RawDecodeResult } from '../../services/render/types';
 

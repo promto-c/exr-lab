@@ -19,4 +19,4 @@ Versions are resolved from `package-lock.json`.
 ## Package Scope
 
 - `packages/exr` depends on: `fflate`.
-- `apps/exr-lab` depends on: `@blackboard/exr` (local workspace package), `lucide-react`, `react`, `react-dom`, `workbox-window`.
+- `apps/exr-lab` depends on: `@bb-studio/exr` (local workspace package), `lucide-react`, `react`, `react-dom`, `workbox-window`.

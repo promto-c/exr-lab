@@ -97,11 +97,11 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: [
         {
-          find: '@blackboard/exr/browser',
+          find: '@bb-studio/exr/browser',
           replacement: path.resolve(__dirname, '../../packages/exr/src/browser/index.ts'),
         },
         {
-          find: '@blackboard/exr',
+          find: '@bb-studio/exr',
           replacement: path.resolve(__dirname, '../../packages/exr/src/index.ts'),
         },
         {

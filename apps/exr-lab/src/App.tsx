@@ -14,7 +14,7 @@ import {
   Sun,
   X,
 } from 'lucide-react';
-import { writeExr } from '@blackboard/exr';
+import { writeExr } from '@bb-studio/exr';
 import { DropZone } from './components/DropZone';
 import { ExportPanel, type ExportRequest } from './components/ExportPanel';
 import { HistogramOverlay } from './components/HistogramOverlay';

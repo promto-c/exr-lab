@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ExrPart } from '@blackboard/exr';
+import type { ExrPart } from '@bb-studio/exr';
 import type { RawDecodeResult } from '../../../services/render/types';
 import { buildExportWriteInput, getLayerChannelNames, getPartLayerNames } from '../exportBuilder';
 

@@ -1,5 +1,5 @@
-import { DecodedPart, ExrPart } from '@blackboard/exr';
-import { expandDecodedPartChannels } from '@blackboard/exr/browser';
+import { DecodedPart, ExrPart } from '@bb-studio/exr';
+import { expandDecodedPartChannels } from '@bb-studio/exr/browser';
 import { RawDecodeResult } from '../../services/render/types';
 
 export function toRawDecodeResult(decoded: DecodedPart, part: ExrPart): RawDecodeResult {

@@ -1,4 +1,4 @@
-import { ExrError, ExrEvent } from '@blackboard/exr';
+import { ExrError, ExrEvent } from '@bb-studio/exr';
 import { LogEntry, LogStatus } from '../../types';
 
 function uid(prefix: string): string {

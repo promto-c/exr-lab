@@ -7,15 +7,15 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run --workspace @blackboard/exr-lab dev",
+    "dev": "npm run --workspace @bb-studio/exr-lab dev",
     "build": "npm run --workspaces build",
-    "preview": "npm run --workspace @blackboard/exr-lab preview",
+    "preview": "npm run --workspace @bb-studio/exr-lab preview",
     "test": "npm run --workspaces test",
     "typecheck": "npm run --workspaces typecheck",
     "lint": "eslint . --ext .ts,.tsx,.mts,.cts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "benchmark": "npm run --workspace @blackboard/exr benchmark",
+    "benchmark": "npm run --workspace @bb-studio/exr benchmark",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "changeset publish"

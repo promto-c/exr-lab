@@ -295,9 +295,9 @@ function collectCompressedChunkTasks(
 function getDefaultWorkerFactory(): WorkerFactory {
   return {
     createZipWorker: () =>
-      new Worker(new URL('./zipDecodeWorker.ts', import.meta.url), { type: 'module' }),
+      new Worker(new URL('./zipDecodeWorker.js', import.meta.url), { type: 'module' }),
     createDwaWorker: () =>
-      new Worker(new URL('./dwaDecodeWorker.ts', import.meta.url), { type: 'module' }),
+      new Worker(new URL('./dwaDecodeWorker.js', import.meta.url), { type: 'module' }),
   };
 }
 

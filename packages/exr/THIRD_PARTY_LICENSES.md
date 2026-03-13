@@ -1,6 +1,6 @@
-# Third-Party Licenses for @blackboard/exr
+# Third-Party Licenses for @bb-studio/exr
 
-The `@blackboard/exr` package includes the following third-party dependency:
+The `@bb-studio/exr` package includes the following third-party dependency:
 
 ## fflate
 

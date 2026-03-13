@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ExrChannel } from '@blackboard/exr';
+import type { ExrChannel } from '@bb-studio/exr';
 import { getLayerMapping, guessChannels } from '../channelMapping';
 
 const ch = (name: string): ExrChannel => ({

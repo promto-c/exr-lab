@@ -1,12 +1,16 @@
 {
-  "name": "@blackboard/exr",
+  "name": "@bb-studio/exr",
   "version": "0.1.0",
-  "description": "Production-grade OpenEXR scanline parser/decoder for browser and Node.js",
+  "description": "OpenEXR scanline parser/decoder for browser and Node.js",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": [
+    "./dist/browser/zipDecodeWorker.js",
+    "./dist/browser/dwaDecodeWorker.js"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -25,13 +29,35 @@
     "LICENSE",
     "THIRD_PARTY_LICENSES.md"
   ],
+  "keywords": [
+    "openexr",
+    "exr",
+    "image",
+    "parser",
+    "decoder",
+    "typescript",
+    "browser",
+    "node"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/promto-c/exr-lab.git"
+  },
+  "homepage": "https://github.com/promto-c/exr-lab#readme",
+  "bugs": {
+    "url": "https://github.com/promto-c/exr-lab/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean --out-dir dist && tsup src/browser/index.ts --format esm --dts --sourcemap --out-dir dist/browser",
+    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean --out-dir dist && tsup src/browser/index.ts --format esm --dts --sourcemap --out-dir dist/browser && tsup src/browser/zipDecodeWorker.ts src/browser/dwaDecodeWorker.ts --format esm --sourcemap --out-dir dist/browser",
     "test": "vitest run src/__tests__",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.browser.json",
-    "benchmark": "vitest bench run bench"
+    "benchmark": "vitest bench run bench",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
-    "fflate": "0.8.2"
+    "fflate": "^0.8.2"
   }
 }

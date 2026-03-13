@@ -1,4 +1,4 @@
-import type { ExrChannel, ExrPart, ExrWindow, WriteExrChannelInput, WriteExrInput } from '@blackboard/exr';
+import type { ExrChannel, ExrPart, ExrWindow, WriteExrChannelInput, WriteExrInput } from '@bb-studio/exr';
 import type { ChannelMapping, ChannelDecodeInfo, RawDecodeResult } from '../../services/render/types';
 
 export type ExportSourceMode = 'part' | 'layer' | 'channel' | 'view';

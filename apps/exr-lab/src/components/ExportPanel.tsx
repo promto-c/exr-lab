@@ -1,6 +1,6 @@
 import React from 'react';
 import { Download } from 'lucide-react';
-import type { ExrPart } from '@blackboard/exr';
+import type { ExrPart } from '@bb-studio/exr';
 import { SubPanel } from './SubPanel';
 import {
   ExportCompression,

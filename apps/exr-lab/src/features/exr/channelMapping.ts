@@ -1,4 +1,4 @@
-import type { ExrChannel } from '@blackboard/exr';
+import type { ExrChannel } from '@bb-studio/exr';
 import type { ChannelMapping } from '../../services/render/types';
 
 export const guessChannels = (channels: ExrChannel[]): ChannelMapping => {

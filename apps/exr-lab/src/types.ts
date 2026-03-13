@@ -1,4 +1,4 @@
-import type { ExrChannel, ExrPart, ExrStructure, ExrWindow } from '@blackboard/exr';
+import type { ExrChannel, ExrPart, ExrStructure, ExrWindow } from '@bb-studio/exr';
 
 export enum LogStatus {
   Start = 'start',

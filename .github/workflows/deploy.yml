@@ -31,7 +31,7 @@ jobs:
         run: npm ci
 
       - name: Build
-        run: npm run --workspace @blackboard/exr-lab build
+        run: npm run --workspace @bb-studio/exr-lab build
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
