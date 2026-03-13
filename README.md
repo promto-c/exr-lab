@@ -1,5 +1,9 @@
 # EXR Workspace
 
+[![npm version](https://img.shields.io/npm/v/%40bb-studio%2Fexr?logo=npm)](https://www.npmjs.com/package/@bb-studio/exr)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Demo-0?logo=github)](https://promto-c.github.io/exr-lab/)
+[![GitHub](https://img.shields.io/github/stars/promto-c/exr-lab)](https://github.com/promto-c/exr-lab)
+
 Monorepo for:
 
 - `@bb-studio/exr`: reusable OpenEXR parser/decoder library.
@@ -16,7 +20,7 @@ Prerequisites: Node.js 20+
 ## Packages
 
 - Library: [`packages/exr`](./packages/exr)
-- Demo app: [`apps/exr-lab`](./apps/exr-lab)
+- Demo app: [`apps/exr-lab`](./apps/exr-lab) | [Live Demo](https://promto-c.github.io/exr-lab/)
 
 ## Versioning and Releases
 

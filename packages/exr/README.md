@@ -1,5 +1,9 @@
 # @bb-studio/exr
 
+[![npm version](https://img.shields.io/npm/v/%40bb-studio%2Fexr?logo=npm)](https://www.npmjs.com/package/@bb-studio/exr)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Demo-0?logo=github)](https://promto-c.github.io/exr-lab/)
+[![GitHub](https://img.shields.io/github/stars/promto-c/exr-lab)](https://github.com/promto-c/exr-lab)
+
 OpenEXR scanline parser/decoder for browser and Node.js.
 
 ## Install
