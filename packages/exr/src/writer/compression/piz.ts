@@ -416,7 +416,8 @@ function heapPop(heap: number[], nodes: HuffmanNode[]): number {
   heap[0] = last;
 
   let i = 0;
-  while (true) {
+  let siftDown = true;
+  while (siftDown) {
     const left = i * 2 + 1;
     const right = left + 1;
     let smallest = i;
@@ -434,7 +435,8 @@ function heapPop(heap: number[], nodes: HuffmanNode[]): number {
       smallest = right;
     }
     if (smallest === i) {
-      break;
+      siftDown = false;
+      continue;
     }
 
     swapHeapEntries(heap, i, smallest);
