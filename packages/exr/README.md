@@ -1,6 +1,6 @@
 # @bb-studio/exr
 
-Production-grade OpenEXR scanline parser/decoder for browser and Node.js.
+OpenEXR scanline parser/decoder for browser and Node.js.
 
 ## Install
 

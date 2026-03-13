@@ -1,6 +1,6 @@
 {
   "name": "@bb-studio/exr",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenEXR scanline parser/decoder for browser and Node.js",
   "license": "MIT",
   "type": "module",
@@ -43,7 +43,7 @@
     "type": "git",
     "url": "git+https://github.com/promto-c/exr-lab.git"
   },
-  "homepage": "https://github.com/promto-c/exr-lab#readme",
+  "homepage": "https://github.com/promto-c/exr-lab/tree/main/packages/exr#readme",
   "bugs": {
     "url": "https://github.com/promto-c/exr-lab/issues"
   },
