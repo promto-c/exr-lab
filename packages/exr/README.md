@@ -36,15 +36,33 @@ const encoded = writeExr({
 });
 ```
 
+Each part may also provide typed `string`, `int`, `float`, or `chromaticities` attributes:
+
+```ts
+const attributes = {
+  ocioColorSpace: { type: 'string', value: 'ACEScg' },
+  chromaticities: {
+    type: 'chromaticities',
+    value: {
+      redX: 0.713,
+      redY: 0.293,
+      greenX: 0.165,
+      greenY: 0.83,
+      blueX: 0.128,
+      blueY: 0.044,
+      whiteX: 0.32168,
+      whiteY: 0.33767,
+    },
+  },
+} as const;
+```
+
 `decodeExrPart` returns sampled-native channel planes with sampling metadata.
 
 ## Browser Worker Helpers
 
 ```ts
-import {
-  decodeExrPartWithWorkers,
-  expandDecodedPartChannels,
-} from '@bb-studio/exr/browser';
+import { decodeExrPartWithWorkers, expandDecodedPartChannels } from '@bb-studio/exr/browser';
 ```
 
 - `decodeExrPartWithWorkers` optionally pre-decodes ZIP/DWA chunks using workers.

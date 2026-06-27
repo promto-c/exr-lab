@@ -2,7 +2,15 @@ import { EXR_MAGIC } from '../shared/constants';
 import { ExrError } from '../shared/errors';
 import { ExrEvent, ExrEventCallback } from '../shared/events';
 import { float32ToFloat16 } from '../shared/half';
-import { ExrWindow, WriteExrChannelInput, WriteExrInput, WriteExrOptions } from '../shared/types';
+import {
+  ExrChromaticities,
+  ExrWindow,
+  WriteExrAttribute,
+  WriteExrChannelInput,
+  WriteExrInput,
+  WriteExrOptions,
+  WriteExrPartInput,
+} from '../shared/types';
 import { ChannelWriteMeta, PartWriteMeta } from './meta';
 import {
   getWriteCompressionHandler,
@@ -15,6 +23,25 @@ const EXR_MULTIPART_FLAG = 0x10;
 
 const UINT32_MAX = 4294967295;
 const UTF8_ENCODER = new TextEncoder();
+const RESERVED_ATTRIBUTE_NAMES = new Set([
+  'channels',
+  'compression',
+  'dataWindow',
+  'displayWindow',
+  'lineOrder',
+  'name',
+  'type',
+]);
+const CHROMATICITY_FIELDS = [
+  'redX',
+  'redY',
+  'greenX',
+  'greenY',
+  'blueX',
+  'blueY',
+  'whiteX',
+  'whiteY',
+] as const satisfies readonly (keyof ExrChromaticities)[];
 
 class ByteWriter {
   private readonly bytes: number[] = [];
@@ -138,9 +165,13 @@ function normalizeChannel(
 
   const pixelType = channel.pixelType;
   if (pixelType !== 0 && pixelType !== 1 && pixelType !== 2) {
-    throw new ExrError('INVALID_WRITE_INPUT', `Unsupported channel pixel type for ${channel.name}.`, {
-      partId,
-    });
+    throw new ExrError(
+      'INVALID_WRITE_INPUT',
+      `Unsupported channel pixel type for ${channel.name}.`,
+      {
+        partId,
+      },
+    );
   }
 
   const xSampling = channel.xSampling ?? 1;
@@ -164,9 +195,13 @@ function normalizeChannel(
   const expectedLength = sampledWidth * sampledHeight;
 
   if (!(channel.data instanceof Float32Array)) {
-    throw new ExrError('INVALID_WRITE_INPUT', `Channel ${channel.name} data must be Float32Array.`, {
-      partId,
-    });
+    throw new ExrError(
+      'INVALID_WRITE_INPUT',
+      `Channel ${channel.name} data must be Float32Array.`,
+      {
+        partId,
+      },
+    );
   }
 
   if (channel.data.length !== expectedLength) {
@@ -223,6 +258,7 @@ function normalizeParts(input: WriteExrInput): PartWriteMeta[] {
 
     const includeNameAttribute = isMultipart || typeof part.name === 'string';
     const includeTypeAttribute = isMultipart || typeof part.type === 'string';
+    const attributes = normalizeAttributes(part.attributes, index);
 
     return {
       id: index,
@@ -236,7 +272,105 @@ function normalizeParts(input: WriteExrInput): PartWriteMeta[] {
       chunkCount,
       includeNameAttribute,
       includeTypeAttribute,
+      attributes,
     };
+  });
+}
+
+function normalizeAttributes(
+  attributes: WriteExrPartInput['attributes'],
+  partId: number,
+): ReadonlyArray<readonly [string, WriteExrAttribute]> {
+  if (attributes === undefined) return [];
+  if (!attributes || typeof attributes !== 'object' || Array.isArray(attributes)) {
+    throw new ExrError('INVALID_WRITE_INPUT', 'Part attributes must be an object.', { partId });
+  }
+
+  return Object.entries(attributes).map(([name, attribute]) => {
+    if (!name || name.includes('\0')) {
+      throw new ExrError('INVALID_WRITE_INPUT', 'Attribute names must be non-empty C strings.', {
+        partId,
+        attribute: name,
+      });
+    }
+    if (RESERVED_ATTRIBUTE_NAMES.has(name)) {
+      throw new ExrError('INVALID_WRITE_INPUT', `Attribute ${name} is managed by the EXR writer.`, {
+        partId,
+        attribute: name,
+      });
+    }
+    validateAttribute(name, attribute, partId);
+    return [name, attribute] as const;
+  });
+}
+
+function validateFiniteAttributeNumber(
+  name: string,
+  value: number,
+  partId: number,
+  field = 'value',
+): void {
+  if (!Number.isFinite(value)) {
+    throw new ExrError('INVALID_WRITE_INPUT', `Attribute ${name}.${field} must be finite.`, {
+      partId,
+      attribute: name,
+      field,
+    });
+  }
+}
+
+function validateAttribute(name: string, attribute: WriteExrAttribute, partId: number): void {
+  if (!attribute || typeof attribute !== 'object') {
+    throw new ExrError('INVALID_WRITE_INPUT', `Attribute ${name} is invalid.`, {
+      partId,
+      attribute: name,
+    });
+  }
+
+  if (attribute.type === 'string') {
+    if (typeof attribute.value !== 'string') {
+      throw new ExrError('INVALID_WRITE_INPUT', `Attribute ${name}.value must be a string.`, {
+        partId,
+        attribute: name,
+      });
+    }
+    return;
+  }
+  if (attribute.type === 'int') {
+    validateFiniteAttributeNumber(name, attribute.value, partId);
+    if (
+      !Number.isInteger(attribute.value) ||
+      attribute.value < -2147483648 ||
+      attribute.value > 2147483647
+    ) {
+      throw new ExrError('INVALID_WRITE_INPUT', `Attribute ${name}.value must be an int32.`, {
+        partId,
+        attribute: name,
+      });
+    }
+    return;
+  }
+  if (attribute.type === 'float') {
+    validateFiniteAttributeNumber(name, attribute.value, partId);
+    return;
+  }
+  if (attribute.type === 'chromaticities') {
+    if (!attribute.value || typeof attribute.value !== 'object') {
+      throw new ExrError(
+        'INVALID_WRITE_INPUT',
+        `Attribute ${name}.value must contain chromaticities.`,
+        { partId, attribute: name },
+      );
+    }
+    for (const field of CHROMATICITY_FIELDS) {
+      validateFiniteAttributeNumber(name, attribute.value[field], partId, field);
+    }
+    return;
+  }
+
+  throw new ExrError('INVALID_WRITE_INPUT', `Attribute ${name} has an unsupported type.`, {
+    partId,
+    attribute: name,
   });
 }
 
@@ -256,12 +390,57 @@ function writeInt32Payload(values: number[]): Uint8Array {
   return out;
 }
 
+function writeFloat32Payload(values: number[]): Uint8Array {
+  const out = new Uint8Array(values.length * 4);
+  const view = new DataView(out.buffer);
+  for (let i = 0; i < values.length; i++) {
+    view.setFloat32(i * 4, values[i], true);
+  }
+  return out;
+}
+
 function writeCompressionPayload(compression: number): Uint8Array {
   return Uint8Array.of(compression & 0xff);
 }
 
 function writeStringPayload(value: string): Uint8Array {
   return UTF8_ENCODER.encode(value);
+}
+
+function writeCustomAttribute(
+  writer: ByteWriter,
+  name: string,
+  attribute: WriteExrAttribute,
+): void {
+  if (attribute.type === 'string') {
+    writeAttribute(writer, name, attribute.type, writeStringPayload(attribute.value));
+    return;
+  }
+  if (attribute.type === 'int') {
+    writeAttribute(writer, name, attribute.type, writeInt32Payload([attribute.value]));
+    return;
+  }
+  if (attribute.type === 'float') {
+    writeAttribute(writer, name, attribute.type, writeFloat32Payload([attribute.value]));
+    return;
+  }
+
+  const value: ExrChromaticities = attribute.value;
+  writeAttribute(
+    writer,
+    name,
+    attribute.type,
+    writeFloat32Payload([
+      value.redX,
+      value.redY,
+      value.greenX,
+      value.greenY,
+      value.blueX,
+      value.blueY,
+      value.whiteX,
+      value.whiteY,
+    ]),
+  );
 }
 
 function writeChannelsPayload(channels: ChannelWriteMeta[]): Uint8Array {
@@ -315,6 +494,10 @@ function writePartHeader(writer: ByteWriter, part: PartWriteMeta): void {
 
   if (part.includeTypeAttribute) {
     writeAttribute(writer, 'type', 'string', writeStringPayload(part.type));
+  }
+
+  for (const [name, attribute] of part.attributes) {
+    writeCustomAttribute(writer, name, attribute);
   }
 
   writer.writeUint8(0);

@@ -8,7 +8,12 @@ function expectCloseArray(actual: Float32Array, expected: number[], epsilon = 1e
   }
 }
 
-function expectRelativeClose(actual: number, expected: number, relativeTolerance: number, absoluteTolerance = 2e-2) {
+function expectRelativeClose(
+  actual: number,
+  expected: number,
+  relativeTolerance: number,
+  absoluteTolerance = 2e-2,
+) {
   const delta = Math.abs(actual - expected);
   const allowed = Math.max(absoluteTolerance, Math.abs(expected) * relativeTolerance);
   expect(delta).toBeLessThanOrEqual(allowed);
@@ -64,6 +69,69 @@ function readFirstChunkDataSize(encoded: Uint8Array, headerEndOffset: number): n
 }
 
 describe('writeExr', () => {
+  it('roundtrips typed custom attributes', () => {
+    const encoded = writeExr({
+      parts: [
+        {
+          compression: 0,
+          dataWindow: { xMin: 0, yMin: 0, xMax: 0, yMax: 0 },
+          channels: [{ name: 'R', pixelType: 2, data: new Float32Array([0.18]) }],
+          attributes: {
+            ocioColorSpace: { type: 'string', value: 'ACES2065-1' },
+            acesImageContainerFlag: { type: 'int', value: 1 },
+            whiteLuminance: { type: 'float', value: 100 },
+            chromaticities: {
+              type: 'chromaticities',
+              value: {
+                redX: 0.7347,
+                redY: 0.2653,
+                greenX: 0,
+                greenY: 1,
+                blueX: 0.0001,
+                blueY: -0.077,
+                whiteX: 0.32168,
+                whiteY: 0.33767,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(parseExrStructure(encoded).parts[0].attributes).toMatchObject({
+      ocioColorSpace: 'ACES2065-1',
+      acesImageContainerFlag: 1,
+      whiteLuminance: 100,
+      chromaticities: {
+        redX: expect.closeTo(0.7347, 5),
+        redY: expect.closeTo(0.2653, 5),
+        greenX: 0,
+        greenY: 1,
+        blueX: expect.closeTo(0.0001, 5),
+        blueY: expect.closeTo(-0.077, 5),
+        whiteX: expect.closeTo(0.32168, 5),
+        whiteY: expect.closeTo(0.33767, 5),
+      },
+    });
+  });
+
+  it('rejects custom attributes that collide with writer-managed headers', () => {
+    expect(() =>
+      writeExr({
+        parts: [
+          {
+            compression: 0,
+            dataWindow: { xMin: 0, yMin: 0, xMax: 0, yMax: 0 },
+            channels: [{ name: 'R', pixelType: 2, data: new Float32Array([0.18]) }],
+            attributes: {
+              channels: { type: 'string', value: 'override' },
+            },
+          },
+        ],
+      }),
+    ).toThrow('Attribute channels is managed by the EXR writer.');
+  });
+
   it('roundtrips single-part data across supported writer compressions', () => {
     const sourceR = [0.25, 1.25, 10.25, 11.25];
 
@@ -198,12 +266,7 @@ describe('writeExr', () => {
   });
 
   it('encodes B44 pLinear HALF blocks through linear-domain mapping', () => {
-    const source = [
-      1, 2, 4, 8,
-      16, 24, 32, 40,
-      3, 6, 12, 18,
-      28, 36, 48, 64,
-    ];
+    const source = [1, 2, 4, 8, 16, 24, 32, 40, 3, 6, 12, 18, 28, 36, 48, 64];
 
     const encoded = writeExr({
       parts: [

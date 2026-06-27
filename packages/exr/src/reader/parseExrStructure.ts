@@ -1,7 +1,13 @@
 import { ExrError } from '../shared/errors';
 import { ExrEvent, ExrEventCallback } from '../shared/events';
 import { COMPRESSION_NAMES, EXR_MAGIC } from '../shared/constants';
-import { ExrChannel, ExrPart, ExrStructure, ParseExrOptions } from '../shared/types';
+import {
+  ExrChannel,
+  ExrChromaticities,
+  ExrPart,
+  ExrStructure,
+  ParseExrOptions,
+} from '../shared/types';
 import { ExrBinaryInput, toArrayBuffer } from '../shared/binary';
 
 function nowMs(): number {
@@ -53,6 +59,13 @@ class BinaryReader {
   public readUint32(): number {
     this.ensureAvailable(4, 'u32', 'uint32');
     const value = this.view.getUint32(this.offset, true);
+    this.offset += 4;
+    return value;
+  }
+
+  public readFloat32(): number {
+    this.ensureAvailable(4, 'f32', 'float32');
+    const value = this.view.getFloat32(this.offset, true);
     this.offset += 4;
     return value;
   }
@@ -215,10 +228,19 @@ function parsePartHeader(reader: BinaryReader, index: number): ExrPart | null {
       value = reader.readInt32();
     } else if (type === 'float') {
       ensureExactAttributeSize(name, type, size, 4);
-      const asInt = reader.readUint32();
-      const scratch = new DataView(new ArrayBuffer(4));
-      scratch.setUint32(0, asInt, true);
-      value = scratch.getFloat32(0, true);
+      value = reader.readFloat32();
+    } else if (type === 'chromaticities') {
+      ensureExactAttributeSize(name, type, size, 32);
+      value = {
+        redX: reader.readFloat32(),
+        redY: reader.readFloat32(),
+        greenX: reader.readFloat32(),
+        greenY: reader.readFloat32(),
+        blueX: reader.readFloat32(),
+        blueY: reader.readFloat32(),
+        whiteX: reader.readFloat32(),
+        whiteY: reader.readFloat32(),
+      } satisfies ExrChromaticities;
     } else {
       reader.skip(size, `unknown attribute ${name}`);
       value = `<${type} data>`;

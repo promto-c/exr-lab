@@ -1,4 +1,4 @@
-import { ExrWindow } from '../shared/types';
+import { ExrWindow, WriteExrAttribute } from '../shared/types';
 
 export interface ChannelWriteMeta {
   name: string;
@@ -26,4 +26,5 @@ export interface PartWriteMeta {
   chunkCount: number;
   includeNameAttribute: boolean;
   includeTypeAttribute: boolean;
+  attributes: ReadonlyArray<readonly [string, WriteExrAttribute]>;
 }

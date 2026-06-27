@@ -20,6 +20,17 @@ export interface ExrWindow {
   yMax: number;
 }
 
+export interface ExrChromaticities {
+  redX: number;
+  redY: number;
+  greenX: number;
+  greenY: number;
+  blueX: number;
+  blueY: number;
+  whiteX: number;
+  whiteY: number;
+}
+
 export interface ExrPart {
   id: number;
   attributes: Record<string, unknown>;
@@ -73,6 +84,12 @@ export interface WriteExrChannelInput {
   ySampling?: number;
 }
 
+export type WriteExrAttribute =
+  | { type: 'string'; value: string }
+  | { type: 'int'; value: number }
+  | { type: 'float'; value: number }
+  | { type: 'chromaticities'; value: ExrChromaticities };
+
 export interface WriteExrPartInput {
   channels: WriteExrChannelInput[];
   compression: ExrCompression | number;
@@ -80,6 +97,7 @@ export interface WriteExrPartInput {
   displayWindow?: ExrWindow;
   name?: string;
   type?: string;
+  attributes?: Readonly<Record<string, WriteExrAttribute>>;
 }
 
 export interface WriteExrInput {
