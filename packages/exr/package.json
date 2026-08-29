@@ -1,7 +1,7 @@
 {
   "name": "@bb-studio/exr",
   "version": "0.1.2",
-  "description": "OpenEXR scanline parser/decoder for browser and Node.js",
+  "description": "OpenEXR scanline parser/decoder/encoder and backend-neutral RGBA helpers for browser and Node.js",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",

@@ -4,13 +4,30 @@
 [![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Demo-0?logo=github)](https://promto-c.github.io/exr-lab/)
 [![GitHub](https://img.shields.io/github/stars/promto-c/exr-lab)](https://github.com/promto-c/exr-lab)
 
-OpenEXR scanline parser/decoder for browser and Node.js.
+OpenEXR scanline parser/decoder/encoder and backend-neutral RGBA helpers for browser and Node.js.
 
 ## Install
 
 ```bash
 npm install @bb-studio/exr
 ```
+
+## Image API
+
+```ts
+import { decodeExrRgba, encodeExrRgba, inspectExrImage } from '@bb-studio/exr';
+
+const info = inspectExrImage(buffer);
+const image = decodeExrRgba(buffer);
+const encodedImage = encodeExrRgba(
+  { width: image.width, height: image.height, rgba: image.rgba },
+  { precision: 'half', includeAlpha: true },
+);
+```
+
+`decodeExrRgba` selects the requested part, or the first part with a data window, expands sampled channels, and resolves conventional RGB/A names including layered suffixes and Y/luma fallback. The result retains data/display windows, channel descriptors, and part attributes.
+
+`encodeExrRgba` accepts straight `Float32Array` RGBA pixels plus optional named channels, typed attributes, compression, and non-zero data/display windows. It returns EXR bytes and has no Blob, renderer, or platform dependency.
 
 ## Core API
 
@@ -66,7 +83,8 @@ import { decodeExrPartWithWorkers, expandDecodedPartChannels } from '@bb-studio/
 ```
 
 - `decodeExrPartWithWorkers` optionally pre-decodes ZIP/DWA chunks using workers.
-- `expandDecodedPartChannels` converts sampled channels into full-resolution planes.
+- `decodeExrRgbaWithWorkers` applies the same RGBA semantics through the worker-assisted path.
+- `expandDecodedPartChannels` is available from the root package and remains re-exported here for existing browser consumers.
 
 ## Error/Diagnostics
 

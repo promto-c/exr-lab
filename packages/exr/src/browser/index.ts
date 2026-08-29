@@ -1,2 +1,3 @@
 export * from './decodeExrPartWithWorkers';
-export * from './expandSampledChannels';
+export * from './decodeExrRgbaWithWorkers';
+export * from '../reader/expandSampledChannels';

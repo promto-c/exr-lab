@@ -1,6 +1,6 @@
 # EXR Core Library
 
-Framework-agnostic OpenEXR parser and scanline decoder.
+Framework-agnostic OpenEXR parser, scanline decoder/encoder, and backend-neutral image helpers.
 
 This module is designed to be reusable across apps and does not depend on React or browser DOM APIs.
 
@@ -10,6 +10,14 @@ This module is designed to be reusable across apps and does not depend on React 
 - `decodeExrPart(buffer, structure, { partId, onEvent? })`
 - Structured diagnostics via `onEvent`
 - Typed failures via `ExrError` and `ExrErrorCode`
+
+## High-level image helpers
+
+- `inspectExrImage(buffer, options?)` inspects the selected image part and windows without decoding pixels.
+- `decodeExrRgba(buffer, options?)` expands sampled channels and assembles full-resolution straight RGBA pixels.
+- `encodeExrRgba(image, options)` writes RGBA plus optional named channels and metadata without platform or renderer dependencies.
+- `expandDecodedPartChannels(decoded, dataWindow)` expands sampled-native channels when RGBA assembly is not desired.
+- `decodeExrRgbaWithWorkers(...)` is available from `@bb-studio/exr/browser` for worker-assisted ZIP/DWA decode.
 
 ## Quick start
 
